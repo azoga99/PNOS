@@ -1,0 +1,384 @@
+/* ═══════════════════════════════════════════════════════════════
+   ПНОС — Polished Modern Light Theme
+   ═══════════════════════════════════════════════════════════════ */
+
+* {
+    font-family: "Segoe UI", sans-serif;
+}
+
+QMainWindow {
+    background-color: #eef1f5;
+}
+
+/* ─── Header ───────────────────────────────────────────────── */
+QLabel#app_header {
+    font-size: 16px;
+    font-weight: bold;
+    color: #1e293b;
+    padding: 4px 0;
+}
+
+QLabel#app_header_accent {
+    color: #6366f1;
+}
+
+QLabel#app_title {
+    font-size: 20px;
+    font-weight: 800;
+    color: #1e293b;
+    margin-bottom: 5px;
+}
+
+QLabel#card_description {
+    font-size: 13px;
+    color: #475569;
+    line-height: 1.4;
+}
+
+/* ─── Панель настроек ──────────────────────────────────────── */
+#settings_panel {
+    background-color: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 14px;
+}
+
+#settings_panel QLabel {
+    font-size: 12px;
+    color: #64748b;
+    font-weight: 500;
+}
+
+QLineEdit {
+    background-color: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 7px 10px;
+    color: #1e293b;
+    font-size: 12px;
+    selection-background-color: #6366f1;
+}
+
+QLineEdit:focus {
+    border-color: #6366f1;
+    background-color: #fff;
+}
+
+QLineEdit:disabled {
+    background-color: #f1f5f9;
+    color: #94a3b8;
+}
+
+/* ─── Переключатель режимов ────────────────────────────────── */
+QPushButton#mode_btn {
+    background-color: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 6px 18px;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QPushButton#mode_btn:hover {
+    background-color: #e2e8f0;
+}
+
+QPushButton#mode_btn[active="true"] {
+    background-color: #6366f1;
+    border-color: #6366f1;
+    color: #ffffff;
+}
+
+/* ─── Текстовое поле ручного ввода ─────────────────────────── */
+QTextEdit#manual_input {
+    background-color: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 8px;
+    font-size: 12px;
+    color: #1e293b;
+    font-family: "Consolas", "Cascadia Code", monospace;
+}
+
+QTextEdit#manual_input:focus {
+    border-color: #6366f1;
+    background-color: #fff;
+}
+
+/* ─── Кнопки общие ─────────────────────────────────────────── */
+QPushButton {
+    background-color: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 6px 14px;
+    color: #475569;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QPushButton:hover {
+    background-color: #e2e8f0;
+}
+
+QPushButton:pressed {
+    background-color: #cbd5e1;
+}
+
+QPushButton:disabled {
+    background-color: #f8fafc;
+    color: #cbd5e1;
+    border-color: #f1f5f9;
+}
+
+QPushButton#browse_btn {
+    padding: 7px 10px;
+    min-width: 32px;
+    font-size: 14px;
+}
+
+/* ─── Кнопки карточек ──────────────────────────────────────── */
+QPushButton#card_button {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #6366f1, stop:1 #8b5cf6);
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 20px;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QPushButton#card_button:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #7c7ff7, stop:1 #9d78fb);
+}
+
+QPushButton#card_button:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #4f46e5, stop:1 #7c3aed);
+}
+
+QPushButton#card_button:disabled {
+    background: #e2e8f0;
+    color: #94a3b8;
+}
+
+/* ─── Кнопка Стоп ─────────────────────────────────────────── */
+QPushButton#stop_button {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #ef4444, stop:1 #dc2626);
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 15px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+QPushButton#stop_button:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #f87171, stop:1 #ef4444);
+}
+
+QPushButton#stop_button:pressed {
+    background: #b91c1c;
+}
+
+QPushButton#stop_button:disabled {
+    background: #f1f5f9;
+    color: #cbd5e1;
+}
+
+/* ─── Лог ──────────────────────────────────────────────────── */
+QTextEdit#log_panel {
+    background-color: #1e293b;
+    border: none;
+    border-radius: 8px;
+    padding: 10px;
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 11px;
+    color: #cbd5e1;
+}
+
+/* ─── Скролл-бар ───────────────────────────────────────────── */
+QScrollBar:vertical {
+    background: transparent;
+    width: 6px;
+}
+
+QScrollBar::handle:vertical {
+    background: #94a3b8;
+    border-radius: 3px;
+    min-height: 20px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #6366f1;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: none;
+    height: 0;
+}
+
+/* ─── Модальное окно и Карточки статистики ─────────────────── */
+QDialog#report_dialog {
+    background-color: #f8fafc;
+    border-radius: 12px;
+}
+
+QDialog#report_dialog QLabel#report_title {
+    font-size: 18px;
+    font-weight: 800;
+    color: #1e293b;
+}
+
+QFrame#stat_box {
+    background-color: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 10px;
+}
+
+QLabel#report_stat {
+    font-size: 12px;
+    color: #64748b;
+    font-weight: 600;
+}
+
+QLabel#report_stat_good {
+    font-size: 16px;
+    color: #10b981;
+    font-weight: 800;
+}
+
+QLabel#report_stat_bad {
+    font-size: 16px;
+    color: #ef4444;
+    font-weight: 800;
+}
+
+/* ─── Таблица отчёта (QTableWidget) ────────────────────────── */
+QTableWidget {
+    background-color: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    gridline-color: #e2e8f0;
+    font-size: 12px;
+    color: #1e293b;
+}
+
+QTableWidget::item {
+    padding: 5px;
+}
+
+QTableWidget::item:selected {
+    background-color: #eff6ff;
+    color: #1e293b;
+}
+
+QHeaderView::section {
+    background-color: #f8fafc;
+    color: #64748b;
+    font-weight: bold;
+    font-size: 12px;
+    padding: 6px;
+    border: none;
+    border-bottom: 2px solid #e2e8f0;
+    border-right: 1px solid #e2e8f0;
+}
+
+QHeaderView::section:last {
+    border-right: none;
+}
+
+/* ─── Сайдбар (Мастер настройки) ───────────────────────────── */
+QFrame#sidebar {
+    background-color: #1e293b;
+    border-right: 1px solid #0f172a;
+}
+
+QFrame#logo_frame {
+    background-color: #0f172a;
+}
+
+QLabel#sidebar_title {
+    color: #ffffff;
+    font-size: 24px;
+    font-weight: 800;
+    letter-spacing: 1px;
+}
+
+QLabel#sidebar_subtitle {
+    color: #94a3b8;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+QPushButton#nav_button {
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+    border-left: 4px solid transparent;
+    color: #94a3b8;
+    text-align: left;
+    padding: 12px 16px 12px 24px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+QPushButton#nav_button:hover {
+    background-color: #334155;
+    color: #e2e8f0;
+}
+
+QPushButton#nav_button:checked {
+    background-color: #2dd4bf;  /* Яркий бирюзовый акцент */
+    color: #1e293b;
+    border-left: 4px solid #14b8a6;
+    font-weight: 700;
+}
+
+QPushButton#nav_button:disabled {
+    color: #475569;
+}
+
+/* ─── Контент и Мелкие Кнопки (Ссылка) ─────────────────────── */
+QFrame#content_frame {
+    background-color: #f1f5f9;
+}
+
+QPushButton#link_button {
+    background-color: transparent;
+    border: none;
+    color: #6366f1;
+    font-weight: 600;
+    text-align: right;
+    padding: 0;
+}
+
+QPushButton#link_button:hover {
+    color: #4f46e5;
+    text-decoration: underline;
+}
+
+/* ─── Лента активности (QListWidget) ────────────────────────── */
+QListWidget#activity_feed {
+    background-color: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 5px;
+    font-size: 12px;
+    color: #475569;
+}
+
+QListWidget#activity_feed::item {
+    padding: 4px 8px;
+    border-bottom: 1px solid #f1f5f9;
+}
+
+QListWidget#activity_feed::item:last {
+    border-bottom: none;
+}

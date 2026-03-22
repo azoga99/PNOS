@@ -1,0 +1,26 @@
+# Учетные данные и ключи API (ВАЖНО!)
+config.py
+
+# Системные и временные файлы Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+.venv
+env.bak/
+venv.bak/
+
+# Временные файлы проекта и логи
+logs/
+*.log
+*_backup.py
+.DS_Store
+
+# Папки отчетов, если они вдруг попадут в корень
+п.*/
+CleanSource.xlsx
+~$*
