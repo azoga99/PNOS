@@ -256,8 +256,83 @@ class Stage5Worker(QThread):
 
                     doc.Save()
                     doc.Close()
+                    doc = None
+
+                    # 5. Очистка таблиц (Удаление пустых строк и Задвижек) через python-docx
+                    self.log.emit("   🧹 Очистка таблиц ультразвуковой толщинометрии...")
+                    import docx
+                    from docx.oxml.table import CT_Tbl
+                    from docx.oxml.text.paragraph import CT_P
+                    from docx.table import Table
+                    from docx.text.paragraph import Paragraph
+                    
+                    try:
+                        clean_doc = docx.Document(report_file)
+                        
+                        def iter_block_items(parent):
+                            parent_elm = parent.element.body if isinstance(parent, docx.document.Document) else parent._element
+                            for child in parent_elm.iterchildren():
+                                if isinstance(child, CT_P):
+                                    yield Paragraph(child, parent)
+                                elif isinstance(child, CT_Tbl):
+                                    yield Table(child, parent)
+
+                        target_table = None
+                        waiting_for_table = False
+                        
+                        for block in iter_block_items(clean_doc):
+                            if isinstance(block, Paragraph):
+                                if "Таблица результатов ультразвуковой толщинометрии" in block.text:
+                                    waiting_for_table = True
+                            elif isinstance(block, Table) and waiting_for_table:
+                                target_table = block
+                                break
+                        
+                        if target_table:
+                            rows_deleted = 0
+                            # Идем с конца, чтобы не сбить индексы при удалении XML узлов
+                            for row in reversed(target_table.rows[1:]): # пропускаем первую строку (заголовок)
+                                is_empty = True
+                                # Проверяем ячейки с 6 по 12 (индексы 5-11, счет с 0)
+                                if len(row.cells) > 5:
+                                    for col_idx in range(5, 12):
+                                        if col_idx < len(row.cells):
+                                            if row.cells[col_idx].text.strip() != "":
+                                                is_empty = False
+                                                break
+                                else:
+                                    is_empty = False # если столбцов меньше, не трогаем
+                                
+                                # Проверяем Задвижку (3 столбец, индекс 2)
+                                is_zadvizhka = False
+                                if len(row.cells) > 2 and "задвижка" in row.cells[2].text.lower():
+                                    is_zadvizhka = True
+                                
+                                # Удаляем из дерева xml
+                                if is_empty or is_zadvizhka:
+                                    tbl = target_table._element
+                                    tbl.remove(row._tr)
+                                    rows_deleted += 1
+                                else:
+                                    # Задаем фиксированную высоту оставшимся строкам (0.45 см)
+                                    row.height = docx.shared.Cm(0.45)
+                                    row.height_rule = docx.enum.table.WD_ROW_HEIGHT_RULE.EXACTLY
+                            
+                            if rows_deleted > 0:
+                                self.log.emit(f"   ✓ Из таблицы удалено строк: {rows_deleted}")
+                            else:
+                                self.log.emit("   ✓ Таблица чистая, удалять нечего.")
+                            
+                            # Сохраняем изменения поверх файла отчета
+                            clean_doc.save(report_file)
+                        else:
+                            self.log.emit("   ⚠ Таблица результатов ультразвуковой толщинометрии не найдена.")
+                            
+                    except Exception as clean_ex:
+                        self.log.emit(f"   ❌ Ошибка при очистке таблиц: {clean_ex}")
+
                     total = r_in + b_in
-                    self.log.emit(f"   ✅ Отчет {p_name} готов. Вставлено: {total}")
+                    self.log.emit(f"   ✅ Отчет {p_name} готов. ФОТО: {total}")
                     point_res["Результат"] = "✅ Успешно" if total > 0 else "⚠️ Пропущено"
                     processed_count += 1
                 except Exception as ex:
