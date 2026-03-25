@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import CONFIG
+from pages.settings_page import SettingsPage
 from workers.stage1_worker import Stage1Worker
 from workers.stage2_worker import Stage2Worker
 from workers.stage3_worker import Stage3Worker
@@ -302,8 +303,7 @@ class MainWindow(QMainWindow):
         self.pages_stack.addWidget(self.page_summary)
 
         # ─── СТРАНИЦА: НАСТРОЙКИ (Кнопка внизу) ───────────────────
-        self.page_settings = QWidget()
-        self._setup_settings_page()
+        self.page_settings = SettingsPage()
         self.pages_stack.addWidget(self.page_settings)
 
         main_layout.addWidget(content_frame)
@@ -320,12 +320,6 @@ class MainWindow(QMainWindow):
         for i, btn in enumerate(self.nav_buttons):
             btn.setChecked(i == index)
         self.btn_settings.setChecked(index == 7)
-
-    def _browse_macro_path(self):
-        """Выбор файла макроса в настройках."""
-        path, _ = QFileDialog.getOpenFileName(self, "Выберите файл макроса", "", "Excel (*.xlsm)")
-        if path:
-            self.edit_macro_path.setText(os.path.normpath(path))
 
     def _setup_page1(self):
         """Создает UI для первого этапа (Настройки и парсинг)."""
@@ -491,99 +485,6 @@ class MainWindow(QMainWindow):
         self.stage1_report_table.hide()
         main_layout.addWidget(self.stage1_report_table)
 
-    def _setup_settings_page(self):
-        """Создает UI для страницы 'Настройки программы'."""
-        from PySide6.QtWidgets import QGroupBox
-        
-        layout = QVBoxLayout(self.page_settings)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(20)
-
-        title = QLabel("⚙️ Настройки программы")
-        title.setObjectName("app_title")
-        layout.addWidget(title)
-        
-        scroll_area = QWidget()
-        scroll_layout = QVBoxLayout(scroll_area)
-        scroll_layout.setSpacing(25)
-
-        # Блок 1: Основные параметры
-        group_main = QGroupBox("Автоматизация и поиск")
-        group_main.setStyleSheet("QGroupBox { font-weight: bold; color: #1e293b; border: 1px solid #cbd5e1; border-radius: 8px; margin-top: 15px; padding: 15px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }")
-        g1_layout = QVBoxLayout(group_main)
-        
-        self.chk_epb = QCheckBox("Искать и скачивать папку 'Стар. ЭПБ'")
-        self.chk_epb.setChecked(True)
-        self.chk_epb.setStyleSheet("font-size: 14px; font-weight: bold; color: #1e293b;")
-        g1_layout.addWidget(self.chk_epb)
-
-        lbl_epb_desc = QLabel("   Если галочка снята, программа не будет проверять наличие старых экспертиз.")
-        lbl_epb_desc.setStyleSheet("color: #475569; font-size: 12px;")
-        g1_layout.addWidget(lbl_epb_desc)
-        
-        self.chk_auto = QCheckBox("Автоматический режим (остановка только на ручном шаге 3)")
-        self.chk_auto.setChecked(False)
-        self.chk_auto.setStyleSheet("font-size: 14px; font-weight: bold; color: #1e293b; margin-top: 10px;")
-        g1_layout.addWidget(self.chk_auto)
-        
-        scroll_layout.addWidget(group_main)
-
-        # Блок 2: Пути к файлам (НОВОЕ)
-        group_paths = QGroupBox("Пути к файлам")
-        group_paths.setStyleSheet("QGroupBox { font-weight: bold; color: #1e293b; border: 1px solid #cbd5e1; border-radius: 8px; margin-top: 15px; padding: 15px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }")
-        g_paths_layout = QVBoxLayout(group_paths)
-
-        lbl_macro = QLabel("Мастер-файл с макросом (для 3 этапа):")
-        lbl_macro.setStyleSheet("color: #1e293b; font-weight: bold; font-size: 13px;")
-        g_paths_layout.addWidget(lbl_macro)
-
-        macro_box = QHBoxLayout()
-        self.edit_macro_path = QLineEdit()
-        self.edit_macro_path.setPlaceholderText("Оставьте пустым для использования пути из config.py")
-        self.edit_macro_path.setStyleSheet("color: #1e293b;")
-        btn_browse_macro = QPushButton("📂 Выбрать")
-        btn_browse_macro.setFixedWidth(100)
-        btn_browse_macro.clicked.connect(self._browse_macro_path)
-        macro_box.addWidget(self.edit_macro_path)
-        macro_box.addWidget(btn_browse_macro)
-        g_paths_layout.addLayout(macro_box)
-        
-        lbl_macro_hint = QLabel("Укажите путь к «ПНОС сводный график Перечни ЭПБ на 2026г.xlsm»")
-        lbl_macro_hint.setStyleSheet("color: #64748b; font-size: 11px;")
-        g_paths_layout.addWidget(lbl_macro_hint)
-        scroll_layout.addWidget(group_paths)
-
-        # Блок 3: Скорость работы
-        group_speed = QGroupBox("Производительность")
-        group_speed.setStyleSheet("QGroupBox { font-weight: bold; color: #1e293b; border: 1px solid #cbd5e1; border-radius: 8px; margin-top: 15px; padding: 15px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }")
-        g2_layout = QVBoxLayout(group_speed)
-        
-        lbl_speed = QLabel("Скорость проверки Яндекс Диска:")
-        lbl_speed.setStyleSheet("color: #1e293b; font-size: 13px;")
-        g2_layout.addWidget(lbl_speed)
-
-        self.btn_speed_fast = QPushButton("🚀 Максимальная")
-        self.btn_speed_fast.setCheckable(True)
-        self.btn_speed_fast.setChecked(True)
-        self.btn_speed_fast.setCursor(Qt.PointingHandCursor)
-        self.btn_speed_fast.setObjectName("nav_button")
-
-        self.btn_speed_safe = QPushButton("🐢 Безопасная")
-        self.btn_speed_safe.setCheckable(True)
-        self.btn_speed_safe.setCursor(Qt.PointingHandCursor)
-        self.btn_speed_safe.setObjectName("nav_button")
-
-        speed_h = QHBoxLayout()
-        speed_h.addWidget(self.btn_speed_fast)
-        speed_h.addWidget(self.btn_speed_safe)
-        g2_layout.addLayout(speed_h)
-        
-        self.btn_speed_fast.clicked.connect(lambda: self.btn_speed_safe.setChecked(False) or self.btn_speed_fast.setChecked(True))
-        self.btn_speed_safe.clicked.connect(lambda: self.btn_speed_fast.setChecked(False) or self.btn_speed_safe.setChecked(True))
-        scroll_layout.addWidget(group_speed)
-
-        layout.addWidget(scroll_area)
-        layout.addStretch()
 
     def _setup_summary_page(self):
         """Создает страницу финального общего отчета."""
@@ -755,8 +656,8 @@ class MainWindow(QMainWindow):
         self.stage1_progress.setValue(0)
         self.stage1_report_table.hide()
 
-        need_epb = self.chk_epb.isChecked()
-        max_threads = 10 if self.btn_speed_fast.isChecked() else 3
+        need_epb = self.page_settings.chk_epb.isChecked()
+        max_threads = 10 if self.page_settings.btn_speed_fast.isChecked() else 3
 
         worker = Stage1Worker(
             excel_path=excel_path, 
@@ -818,7 +719,7 @@ class MainWindow(QMainWindow):
                 self.nav_buttons[1].setEnabled(True)
                 self._switch_page(1)
                 
-            if getattr(self, "chk_auto", None) and self.chk_auto.isChecked():
+            if self.page_settings.chk_auto.isChecked():
                 self.stub_pages[0]["btn_run"].click()
         else:
             self.btn_start_stage1.setText("Повторить")
@@ -930,7 +831,7 @@ class MainWindow(QMainWindow):
             preview_table.clear()
             preview_table.hide()
             
-        macro_path = self.edit_macro_path.text().strip() or None
+        macro_path = self.page_settings.edit_macro_path.text().strip() or None
         worker = Stage3Worker(local_root, macro_master_path=macro_path, parent=self)
         worker.log.connect(self._append_log)
         worker.info.connect(lambda msg, cat: self._add_activity(3, msg, cat))
@@ -995,7 +896,7 @@ class MainWindow(QMainWindow):
                 self._switch_page(next_actual_stage)
                 
                 # Если авторежим и это не переход к ручному шагу 3 (индекс 2)
-                if getattr(self, "chk_auto", None) and self.chk_auto.isChecked():
+                if self.page_settings.chk_auto.isChecked():
                     if next_actual_stage != 2:
                         from PySide6.QtCore import QTimer
                         QTimer.singleShot(1000, self.stub_pages[next_actual_stage - 1]["btn_run"].click)
