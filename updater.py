@@ -151,11 +151,14 @@ def apply_update_and_restart(new_exe_path: str):
     bat_path = os.path.join(current_dir, "_updater.bat")
 
     bat_content = f"""@echo off
-chcp 65001 >nul
-echo Обновление ПНОС...
+chcp 1251 >nul
+echo Обновление ПНОС... Пожалуйста, подождите.
+
+rem Принудительно завершаем все процессы программы
+taskkill /f /im "{current_name}" >nul 2>&1
 
 :retry_del
-timeout /t 2 /nobreak >nul
+timeout /t 3 /nobreak >nul
 if not exist "{current_exe}" goto do_rename
 del /f /q "{current_exe}"
 if exist "{current_exe}" goto retry_del
@@ -167,12 +170,13 @@ if not exist "{os.path.join(current_dir, current_name)}" (
     goto do_rename
 )
 
-timeout /t 2 /nobreak >nul
-start "" "{os.path.join(current_dir, current_name)}"
+echo Запуск новой версии...
+timeout /t 3 /nobreak >nul
+start "" /d "{current_dir}" "{current_name}"
 (goto) 2>nul & del "%~f0"
 """
 
-    with open(bat_path, "w", encoding="utf-8") as f:
+    with open(bat_path, "w", encoding="cp1251") as f:
         f.write(bat_content)
 
     # Запускаем батник и немедленно выходим
