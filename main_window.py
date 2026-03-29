@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from config import CONFIG
 from utils import resource_path
+from version import APP_VERSION
 from pages.settings_page import SettingsPage
 from workers.stage1_worker import Stage1Worker
 from workers.stage2_worker import Stage2Worker
@@ -81,7 +82,7 @@ class MainWindow(QMainWindow):
         app_title.setObjectName("sidebar_title")
         logo_layout.addWidget(app_title)
 
-        app_sub = QLabel("Генератор отчётов")
+        app_sub = QLabel(f"Версия {APP_VERSION}")
         app_sub.setObjectName("sidebar_subtitle")
         logo_layout.addWidget(app_sub)
         
@@ -542,14 +543,7 @@ class MainWindow(QMainWindow):
             self.entry_local.setText(folder)
 
     def _get_local_root(self) -> str:
-        path = self.entry_local.text().strip()
-        if not path:
-            desktop = os.path.join(os.path.expanduser("~"), "Desktop", "ПНОС")
-            self.entry_local.setText(desktop)
-            return desktop
-        return path
-
-    def _get_local_root(self) -> str:
+        """Получает путь к корневой папке для отчетов."""
         path = self.entry_local.text().strip()
         if not path:
             desktop = os.path.join(os.path.expanduser("~"), "Desktop", "ПНОС")
