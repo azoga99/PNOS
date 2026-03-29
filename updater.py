@@ -155,7 +155,7 @@ chcp 65001 >nul
 echo Обновление ПНОС...
 
 :retry_del
-timeout /t 1 /nobreak >nul
+timeout /t 2 /nobreak >nul
 if not exist "{current_exe}" goto do_rename
 del /f /q "{current_exe}"
 if exist "{current_exe}" goto retry_del
@@ -163,10 +163,11 @@ if exist "{current_exe}" goto retry_del
 :do_rename
 rename "{new_exe_path}" "{current_name}"
 if not exist "{os.path.join(current_dir, current_name)}" (
-    timeout /t 1 /nobreak >nul
+    timeout /t 2 /nobreak >nul
     goto do_rename
 )
 
+timeout /t 2 /nobreak >nul
 start "" "{os.path.join(current_dir, current_name)}"
 (goto) 2>nul & del "%~f0"
 """
