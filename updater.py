@@ -92,7 +92,8 @@ class UpdateWorker(QThread):
                 # Режим разработки (python main.py)
                 current_dir = os.path.dirname(os.path.abspath(__file__))
 
-            # Путь для временного ZIP
+            # Пути для файлов
+            new_exe_path = os.path.join(current_dir, "PNOS_update.exe")
             temp_zip = os.path.join(current_dir, "update_pkg.zip")
 
             dl_resp = requests.get(download_url, stream=True, timeout=120)
@@ -129,6 +130,7 @@ class UpdateWorker(QThread):
                     # Чтобы избежать ошибки [Errno 13] Permission denied (если имя внутри ZIP совпадает с запущенным ПНОС.exe),
                     # мы распаковываем во временную папку, а не в текущую.
                     tmp_extract_dir = tempfile.mkdtemp(dir=current_dir)
+                    extracted_path = None
                     try:
                         zf.extract(exe_inside, tmp_extract_dir)
                         extracted_path = os.path.join(tmp_extract_dir, exe_inside)
@@ -139,7 +141,7 @@ class UpdateWorker(QThread):
                         os.rename(extracted_path, new_exe_path)
                     finally:
                         # Удаляем временную папку и её содержимое
-                        if os.path.exists(extracted_path):
+                        if extracted_path and os.path.exists(extracted_path):
                             try: os.remove(extracted_path)
                             except: pass
                         try: os.rmdir(tmp_extract_dir)
