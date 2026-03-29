@@ -4432,6 +4432,7 @@
   ('urllib3.util.wait',
    'C:\\Users\\volod\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\urllib3\\util\\wait.py',
    'PYMODULE'),
+  ('utils', 'C:\\Users\\volod\\Desktop\\PNOS\\utils.py', 'PYMODULE'),
   ('uuid',
    'C:\\Users\\volod\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\uuid.py',
    'PYMODULE'),

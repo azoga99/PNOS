@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import CONFIG
+from utils import resource_path
 from pages.settings_page import SettingsPage
 from workers.stage1_worker import Stage1Worker
 from workers.stage2_worker import Stage2Worker
@@ -50,7 +51,7 @@ class MainWindow(QMainWindow):
         self._start_time = None
         self._is_stopping = False
         
-        self.setWindowIcon(QIcon("resources/icon.ico"))
+        self.setWindowIcon(QIcon(resource_path(os.path.join("resources", "icon.ico"))))
         self._setup_ui()
 
     def _setup_ui(self):

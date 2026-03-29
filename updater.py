@@ -153,11 +153,22 @@ def apply_update_and_restart(new_exe_path: str):
     bat_content = f"""@echo off
 chcp 65001 >nul
 echo Обновление ПНОС...
-timeout /t 2 /nobreak >nul
+
+:retry_del
+timeout /t 1 /nobreak >nul
+if not exist "{current_exe}" goto do_rename
 del /f /q "{current_exe}"
+if exist "{current_exe}" goto retry_del
+
+:do_rename
 rename "{new_exe_path}" "{current_name}"
+if not exist "{os.path.join(current_dir, current_name)}" (
+    timeout /t 1 /nobreak >nul
+    goto do_rename
+)
+
 start "" "{os.path.join(current_dir, current_name)}"
-del /f /q "{bat_path}"
+(goto) 2>nul & del "%~f0"
 """
 
     with open(bat_path, "w", encoding="utf-8") as f:
