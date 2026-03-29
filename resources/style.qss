@@ -312,9 +312,9 @@ QLabel#sidebar_title {
 }
 
 QLabel#sidebar_subtitle {
-    color: #94a3b8;
+    color: #2dd4bf;  /* Яркий бирюзовый для версии */
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 800;
 }
 
 QPushButton#nav_button {
