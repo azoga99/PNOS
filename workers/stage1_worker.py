@@ -18,6 +18,7 @@ from PySide6.QtCore import QThread, Signal
 from config import CONFIG
 from yandex_api import YandexDiskAPI
 from excel_service import analyze_excel
+from status_manager import get_stage_status, set_stage_status
 
 
 class Stage1Worker(QThread):
@@ -137,6 +138,18 @@ class Stage1Worker(QThread):
                     if self._is_cancelled:
                         return info
 
+                    local_folder = os.path.join(self.local_root, f"п.{p_num}")
+                    if get_stage_status(local_folder, "stage1"):
+                        # Пропукаем запросы к Яндексу, сразу говорим, что всё валидно
+                        info["is_valid"] = True
+                        info["remote_path"] = "Local Cache"
+                        info["found_in"] = "Локальный диск (Уже обработан)"
+                        
+                        completed_checks += 1
+                        pct = 15 + int((completed_checks) / len(points) * 20)
+                        self.progress.emit(min(pct, 35))
+                        return info
+
                     folder_path, found_in = await api_items.find_point_folder(session, extended_search_paths, p_num)
                     info["remote_path"] = folder_path
                     info["found_in"] = found_in
@@ -244,6 +257,14 @@ class Stage1Worker(QThread):
                     local_folder = os.path.join(self.local_root, f"п.{p_num}")
                     os.makedirs(local_folder, exist_ok=True)
 
+                    if get_stage_status(local_folder, "stage1"):
+                        self.log.emit(f"── Пункт п.{p_num} ──")
+                        self.log.emit(f"   ⏭ Этап 1 уже завершен, пропускаем загрузку.")
+                        completed_dl += 1
+                        pct = 40 + int(completed_dl / len(valid_points) * 55)
+                        self.progress.emit(min(pct, 95))
+                        return p_num
+
                     self.log.emit(f"── Начато скачивание п.{p_num} ──")
 
                     # Качаем папки пункта Одновременно!
@@ -268,6 +289,8 @@ class Stage1Worker(QThread):
                         if not os.path.exists(dest):
                             shutil.copy2(tpl_path, dest)
                             self.log.emit(f"   п.{p_num} 📄 {tpl_name} скопирован")
+
+                    set_stage_status(local_folder, "stage1", True)
 
                     completed_dl += 1
                     pct = 40 + int(completed_dl / len(valid_points) * 55)

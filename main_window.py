@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QTextEdit, QMessageBox, QDialog, QCheckBox,
     QSizePolicy, QSpacerItem, QApplication, QStackedWidget,
     QTableWidget, QTableWidgetItem, QHeaderView, QListWidget,
-    QListWidgetItem
+    QListWidgetItem, QScrollArea
 )
 
 from config import CONFIG
@@ -26,6 +26,7 @@ from workers.stage2_worker import Stage2Worker
 from workers.stage3_worker import Stage3Worker
 from workers.stage4_worker import Stage4Worker
 from workers.stage5_worker import Stage5Worker
+from report_dialog import ReportDialog
 
 import subprocess
 
@@ -177,7 +178,7 @@ class MainWindow(QMainWindow):
         
         stage_meta = {
             2: {"title": "Шаг 2: Копирование таблиц", "desc": "Извлечение 3-й таблицы из 'Акта замеров' и перенос её на листы 'Импорт' без форматирования.", "warn": ""},
-            3: {"title": "Шаг 3: Ручной контроль", "desc": "Проверьте файлы перед запуском макросов. Этот этап выполняется вручную.", "warn": "Инструкции будут добавлены позже."},
+            3: {"title": "Шаг 3: Ручной контроль", "desc": "Проверьте файлы перед запуском макросов. Этот этап выполняется вручную.", "warn": ""},
             4: {"title": "Шаг 4: Запуск макросов", "desc": "Перенос переменных из Паспорта (Word) в Excel и автоматический запуск макросов Restore и Save.", "warn": "⚠️ Во время работы этого этапа не открывайте другие файлы Excel и не перехватывайте фокус мыши!"},
             5: {"title": "Шаг 5: Создание отчёта", "desc": "Генерация финального отчета Word.", "warn": ""},
             6: {"title": "Шаг 6: Вставка картинок", "desc": "Пост-обработка: вставка скачанных фотографий в отчёт (в разработке).", "warn": ""}
@@ -198,17 +199,46 @@ class MainWindow(QMainWindow):
             desc.setWordWrap(True)
             layout.addWidget(desc)
             
+            if stage_num == 3:
+                from PySide6.QtWidgets import QTextBrowser
+                instr_html = """
+                <h3 style="color:#2C3E50; margin-bottom: 5px;">Этап ручного контроля</h3>
+                <p>Обязательно проверьте выполнение данного этапа перед переходом к следующему!</p>
+                <b>1. Предназначение трубопровода (из старой ЭПБ, п. 6)</b><br>
+                • Если прописано конкретное назначение («для транспортировки...») — переносите данные как есть.<br>
+                • Если общая формулировка («для транспортировки рабочей среды») — не копируйте её. Замените общие слова на конкретное вещество (например: «предназначен для транспортировки рафината растворителя»).<br><br>
+
+                <b>2. Работа с датами</b><br>
+                • <b>Дата следующей ревизии (ячейка B28)</b>: Оставьте поле пустым. Эта информация нигде не участвует.<br>
+                • <b>Дата паспорта (ячейка B47)</b>: Если указана в исходном документе — впишите её. Если даты нет — просто оставьте поле пустым.<br><br>
+
+                <b>3. Данные предыдущей ЭПБ</b><br>
+                • <b>Проводилась или нет (ячейка B51)</b>: Сначала укажите, проводилась ли ЭПБ ранее.<br>
+                • <b>Организация (ячейка B52)</b>: Скопируйте название организации с титульного листа предыдущей экспертизы.<br>
+                • <b>Регистрационный номер (ячейка B53)</b>: В первую очередь ищите номер Ростехнадзора (на титульном листе/в уведомлении). Если его нет, впишите внутренний номер заключения от самой организации.<br>
+                • <b>Дата ЭПБ (ячейка B54)</b>: Дата подписания документа с титульного листа.<br>
+                • <b>Количество листов (ячейка B55)</b>: Общее количество листов самого заключения (лист уведомления Ростехнадзора <b>не учитывается</b>).<br><br>
+
+                <b>АКТ УЗК:</b> таблица заполняется вручную.
+                """
+                instruction_box = QTextBrowser()
+                instruction_box.setHtml(instr_html)
+                instruction_box.setStyleSheet("background-color: #ffffff; color: #1e293b; border: 1px solid #E0E0E0; border-radius: 6px; padding: 10px; font-size: 18px;")
+                layout.addWidget(instruction_box)
+            
             if meta.get("warn"):
                 warn = QLabel(meta.get("warn"))
                 warn.setStyleSheet("color: #fbbf24; font-weight: bold; margin-top: 10px;")
                 warn.setWordWrap(True)
                 layout.addWidget(warn)
             
-            layout.addStretch()
+            if stage_num != 3:
+                layout.addStretch()
 
             btn_layout = QHBoxLayout()
             btn_run = QPushButton(f"Запустить {meta.get('title', f'Шаг {stage_num}').split(':')[0]}")
             btn_run.setObjectName("card_button")
+            btn_run.setProperty("original_text", btn_run.text())
             btn_run.setFixedWidth(200)
             btn_run.setCursor(Qt.PointingHandCursor)
             
@@ -219,10 +249,6 @@ class MainWindow(QMainWindow):
             btn_stop.setEnabled(False)
             btn_stop.clicked.connect(self._force_stop_active_stage)
 
-            btn_skip = QPushButton("Пропустить")
-            btn_skip.setObjectName("link_button")
-            btn_skip.setCursor(Qt.PointingHandCursor)
-
             # Привязываем к заглушкам
             if stage_num == 2: btn_run.clicked.connect(self._start_stage2)
             if stage_num == 3: btn_run.clicked.connect(self._start_manual_stage3)
@@ -230,12 +256,9 @@ class MainWindow(QMainWindow):
             if stage_num == 5: btn_run.clicked.connect(self._start_stage4)
             if stage_num == 6: btn_run.clicked.connect(self._start_stage5)
             
-            btn_skip.clicked.connect(lambda checked, idx=stage_num: self._skip_stage(idx))
-            
             btn_layout.addStretch()
             btn_layout.addWidget(btn_run)
             btn_layout.addWidget(btn_stop)
-            btn_layout.addWidget(btn_skip)
             btn_layout.addStretch()
             layout.addLayout(btn_layout)
 
@@ -291,7 +314,6 @@ class MainWindow(QMainWindow):
                 "btn_stop": btn_stop,
                 "progress": progress,
                 "activity_list": act_list,
-                "btn_skip": btn_skip,
                 "preview_table": preview_table,
                 "report_table": report_table
             })
@@ -310,9 +332,6 @@ class MainWindow(QMainWindow):
 
         # Выбираем первую страницу по умолчанию
         self._switch_page(0)
-        # Отключаем кнопки 2-5
-        for i in range(1, 5):
-            self.nav_buttons[i].setEnabled(False)
 
     def _switch_page(self, index: int):
         """Переключает активную страницу и подсвечивает кнопку в сайдбаре."""
@@ -320,6 +339,7 @@ class MainWindow(QMainWindow):
         for i, btn in enumerate(self.nav_buttons):
             btn.setChecked(i == index)
         self.btn_settings.setChecked(index == 7)
+        self._update_global_progress()
 
     def _setup_page1(self):
         """Создает UI для первого этапа (Настройки и парсинг)."""
@@ -340,98 +360,32 @@ class MainWindow(QMainWindow):
         settings = QFrame()
         settings.setObjectName("settings_panel")
         s_layout = QGridLayout(settings)
-        s_layout.setSpacing(10)
-
-        # ─── Переключатель режимов ─────────────────────────────────
-        mode_layout = QHBoxLayout()
-        self.btn_mode_excel = QPushButton("Из Excel")
-        self.btn_mode_excel.setCursor(Qt.PointingHandCursor)
-        self.btn_mode_excel.setCheckable(True)
-        self.btn_mode_excel.setChecked(True)
-        self.btn_mode_excel.setProperty("active", True)
-        self.btn_mode_excel.setFixedWidth(120)
-
-        self.btn_mode_manual = QPushButton("Вручную")
-        self.btn_mode_manual.setCursor(Qt.PointingHandCursor)
-        self.btn_mode_manual.setCheckable(True)
-        self.btn_mode_manual.setProperty("active", False)
-        self.btn_mode_manual.setFixedWidth(120)
-
-        mode_layout.addWidget(self.btn_mode_excel)
-        mode_layout.addWidget(self.btn_mode_manual)
-        mode_layout.addStretch()
-        
-        # Заворачиваем в QWidget для Grid
-        mode_widget = QWidget()
-        mode_widget.setLayout(mode_layout)
-        mode_layout.setContentsMargins(0, 0, 0, 0)
-        s_layout.addWidget(mode_widget, 0, 0, 1, 3)
-
-        self.btn_mode_excel.clicked.connect(lambda: self._set_mode("excel"))
-        self.btn_mode_manual.clicked.connect(lambda: self._set_mode("manual"))
-        self._mode = "excel"
-
-        # ─── Stack для смены полей ввода ───────────────────────────
-        from PySide6.QtWidgets import QStackedWidget
-        self.input_stack = QStackedWidget()
-        s_layout.addWidget(self.input_stack, 1, 0, 1, 3)
-
-        # -- Страница 0: Excel --
-        page_excel = QWidget()
-        layout_excel = QHBoxLayout(page_excel)
-        layout_excel.setContentsMargins(0, 0, 0, 0)
-
-        lbl_excel = QLabel("Файл Excel:")
-        layout_excel.addWidget(lbl_excel)
-
-        self.entry_excel = QLineEdit()
-        self.entry_excel.setPlaceholderText("Выберите Excel файл с реестром пунктов...")
-        default_path = CONFIG.get("DEFAULT_EXCEL_PATH", "").strip()
-        if default_path:
-            self.entry_excel.setText(default_path)
-        layout_excel.addWidget(self.entry_excel)
-
-        btn_browse_excel = QPushButton("📂")
-        btn_browse_excel.setObjectName("browse_btn")
-        btn_browse_excel.setFixedWidth(40)
-        btn_browse_excel.setCursor(Qt.PointingHandCursor)
-        btn_browse_excel.clicked.connect(self._browse_excel)
-        layout_excel.addWidget(btn_browse_excel)
-        
-        self.input_stack.addWidget(page_excel)
-
-        # -- Страница 1: Ручной ввод --
-        page_manual = QWidget()
-        layout_manual = QHBoxLayout(page_manual)
-        layout_manual.setContentsMargins(0, 0, 0, 0)
-        
+        # ─── Ручной ввод ───────────────────────────
         lbl_manual = QLabel("Пункты:")
         lbl_manual.setAlignment(Qt.AlignTop)
-        layout_manual.addWidget(lbl_manual)
+        s_layout.addWidget(lbl_manual, 0, 0)
         
         self.text_manual = QTextEdit()
         self.text_manual.setPlaceholderText("Введите номера пунктов через пробел, запятую или с новой строки...\nПример: 2758, 2759, 2760")
         self.text_manual.setMaximumHeight(80)
-        layout_manual.addWidget(self.text_manual)
-        
-        self.input_stack.addWidget(page_manual)
+        s_layout.addWidget(self.text_manual, 0, 1, 1, 2)
 
         # Путь к локальной папке
         lbl_local = QLabel("Локальная папка:")
-        s_layout.addWidget(lbl_local, 2, 0)
+        s_layout.addWidget(lbl_local, 1, 0)
 
         self.entry_local = QLineEdit()
         desktop = os.path.join(os.path.expanduser("~"), "Desktop", "ПНОС")
         self.entry_local.setText(desktop)
         self.entry_local.setPlaceholderText("Папка на рабочем столе для отчётов...")
-        s_layout.addWidget(self.entry_local, 2, 1)
+        s_layout.addWidget(self.entry_local, 1, 1)
 
         btn_browse_local = QPushButton("📂")
         btn_browse_local.setObjectName("browse_btn")
         btn_browse_local.setFixedWidth(40)
         btn_browse_local.setCursor(Qt.PointingHandCursor)
         btn_browse_local.clicked.connect(self._browse_local)
-        s_layout.addWidget(btn_browse_local, 2, 2)
+        s_layout.addWidget(btn_browse_local, 1, 2)
 
         main_layout.addWidget(settings)
         
@@ -510,13 +464,24 @@ class MainWindow(QMainWindow):
         
         layout.addWidget(self.summary_card)
 
+        btn_report = QPushButton("📄 Открыть подробный отчет")
+        btn_report.setObjectName("card_button")
+        btn_report.setFixedWidth(300)
+        btn_report.clicked.connect(self._show_final_report_dialog)
+        layout.addWidget(btn_report, alignment=Qt.AlignCenter)
+
         btn_finish = QPushButton("Вернуться к первому шагу")
-        btn_finish.setObjectName("card_button")
+        btn_finish.setObjectName("stop_button") # Использовал другой стиль для контраста
         btn_finish.setFixedWidth(300)
         btn_finish.clicked.connect(lambda: self._switch_page(0))
         
         layout.addWidget(btn_finish, alignment=Qt.AlignCenter)
         layout.addStretch()
+
+    def _show_final_report_dialog(self):
+        root = self._get_local_root()
+        dlg = ReportDialog(root, self)
+        dlg.exec()
 
     def _add_activity(self, stage_idx: int, message: str, category: str = "info"):
         """
@@ -568,49 +533,17 @@ class MainWindow(QMainWindow):
 
     # ─── Вспомогательные методы ────────────────────────────────────
 
-    def _set_mode(self, mode: str):
-        self._mode = mode
-        if mode == "excel":
-            self.btn_mode_excel.setChecked(True)
-            self.btn_mode_excel.setProperty("active", True)
-            self.btn_mode_manual.setChecked(False)
-            self.btn_mode_manual.setProperty("active", False)
-            self.input_stack.setCurrentIndex(0)
-        else:
-            self.btn_mode_excel.setChecked(False)
-            self.btn_mode_excel.setProperty("active", False)
-            self.btn_mode_manual.setChecked(True)
-            self.btn_mode_manual.setProperty("active", True)
-            self.input_stack.setCurrentIndex(1)
-            
-        # Обновляем стили
-        self.btn_mode_excel.style().unpolish(self.btn_mode_excel)
-        self.btn_mode_excel.style().polish(self.btn_mode_excel)
-        self.btn_mode_manual.style().unpolish(self.btn_mode_manual)
-        self.btn_mode_manual.style().polish(self.btn_mode_manual)
-
-    def _browse_excel(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Выбрать Excel файл", "",
-            "Excel Files (*.xlsx *.xlsm);;All Files (*)"
-        )
-        if path:
-            self.entry_excel.setText(path)
-
     def _browse_local(self):
         folder = QFileDialog.getExistingDirectory(self, "Выбрать папку")
         if folder:
             self.entry_local.setText(folder)
 
-
-    def _get_excel_path(self) -> str | None:
-        path = self.entry_excel.text().strip()
+    def _get_local_root(self) -> str:
+        path = self.entry_local.text().strip()
         if not path:
-            QMessageBox.warning(self, "Ошибка", "Укажите путь к файлу Excel.")
-            return None
-        if not os.path.exists(path):
-            QMessageBox.warning(self, "Ошибка", f"Файл не найден:\n{path}")
-            return None
+            desktop = os.path.join(os.path.expanduser("~"), "Desktop", "ПНОС")
+            self.entry_local.setText(desktop)
+            return desktop
         return path
 
     def _get_local_root(self) -> str:
@@ -626,27 +559,19 @@ class MainWindow(QMainWindow):
     def _start_stage1(self):
         local_root = self._get_local_root()
 
-        excel_path = None
-        manual_points = None
-
-        if self._mode == "excel":
-            excel_path = self._get_excel_path()
-            if not excel_path:
-                return
-        else:
-            import re
-            text = self.text_manual.toPlainText()
-            # Извлекаем все числа
-            raw_points = re.findall(r'\d+', text)
-            # Убираем дубликаты, сохраняя порядок
-            manual_points = []
-            for p in raw_points:
-                if p not in manual_points:
-                    manual_points.append(p)
-            
-            if not manual_points:
-                QMessageBox.warning(self, "Ошибка", "Укажите хотя бы один номер пункта.")
-                return
+        import re
+        text = self.text_manual.toPlainText()
+        # Извлекаем все числа
+        raw_points = re.findall(r'\d+', text)
+        # Убираем дубликаты, сохраняя порядок
+        manual_points = []
+        for p in raw_points:
+            if p not in manual_points:
+                manual_points.append(p)
+        
+        if not manual_points:
+            QMessageBox.warning(self, "Ошибка", "Укажите хотя бы один номер пункта.")
+            return
 
         self._start_time = time.time()
         self._stage_results = {}
@@ -660,7 +585,7 @@ class MainWindow(QMainWindow):
         max_threads = 10 if self.page_settings.btn_speed_fast.isChecked() else 3
 
         worker = Stage1Worker(
-            excel_path=excel_path, 
+            excel_path=None, 
             local_root=local_root, 
             manual_points=manual_points, 
             need_epb=need_epb,
@@ -711,24 +636,18 @@ class MainWindow(QMainWindow):
 
     def _on_stage1_finished(self, success: bool):
         self.btn_stop_stage1.setEnabled(False) # Выключаем СТОП
+        self.btn_start_stage1.setText("Запустить создание структуры")
+        self.btn_start_stage1.setEnabled(True)
+        
         if success:
-            self.btn_start_stage1.setText("✓ Выполнено (Догрузить ещё)")
-            self.btn_start_stage1.setEnabled(True)
-            # Разблокируем Этап 2 в сайдбаре
             if len(self.nav_buttons) > 1:
-                self.nav_buttons[1].setEnabled(True)
                 self._switch_page(1)
                 
             if self.page_settings.chk_auto.isChecked():
                 self.stub_pages[0]["btn_run"].click()
-        else:
-            self.btn_start_stage1.setText("Повторить")
-            self.btn_start_stage1.setEnabled(True)
+
         self._update_global_progress()
 
-    def _skip_stage(self, stage_num: int):
-        """Пропускает этап и включает следующий."""
-        self._on_stub_finished(stage_num - 1, True)
 
     def _start_stage2(self):
         local_root = self._get_local_root()
@@ -885,9 +804,9 @@ class MainWindow(QMainWindow):
         p = self.stub_pages[step_idx - 1]
         btn, stop = p["btn_run"], p["btn_stop"]
         stop.setEnabled(False)
+        btn.setText(btn.property("original_text"))
+        btn.setEnabled(True)
         if success:
-            btn.setText("✓ Выполнено (Повторить)")
-            btn.setEnabled(True)
             self._add_activity(step_idx, "Этап успешно завершен!", "done")
             # Активировать следующий этап если есть
             next_actual_stage = step_idx + 1
@@ -904,22 +823,12 @@ class MainWindow(QMainWindow):
                 # Все этапы завершены -> Перейти к глобальному отчету
                 self._calculate_global_summary()
                 self._switch_page(6)
-        else:
-            btn.setText("Повторить")
-            btn.setEnabled(True)
         self._update_global_progress()
 
     def _update_global_progress(self):
-        completed = 0
-        s1 = self.btn_start_stage1.text()
-        if "Завершено" in s1 or "Готово" in s1 or "Выполнено" in s1:
-            completed += 1
-        for p in self.stub_pages:
-            t = p["btn_run"].text()
-            if "Готово" in t or "Выполнено" in t:
-                completed += 1
-        
-        self.global_progress.setValue(int(completed * (100 / 6)))
+        idx = self.pages_stack.currentIndex()
+        if idx > 6: idx = 6
+        self.global_progress.setValue(int(idx * (100.0 / 6.0)))
 
     def _force_stop_active_stage(self):
         """Принудительная остановка текущего процесса и очистка COM."""
@@ -961,14 +870,14 @@ class MainWindow(QMainWindow):
 
             # 3. Сбрасываем UI
             self.btn_start_stage1.setEnabled(True)
-            self.btn_start_stage1.setText("Запустить заново")
+            self.btn_start_stage1.setText("Запустить создание структуры")
             self.btn_stop_stage1.setEnabled(False)
             
             if hasattr(self, 'stub_pages'):
                 for p in self.stub_pages:
                     try:
                         p["btn_run"].setEnabled(True)
-                        p["btn_run"].setText("Запустить заново")
+                        p["btn_run"].setText(p["btn_run"].property("original_text"))
                         p["btn_stop"].setEnabled(False)
                     except Exception: 
                         continue
@@ -1031,3 +940,6 @@ class MainWindow(QMainWindow):
             summary_text += "✨ Все этапы пройдены идеально!"
 
         self.lbl_summary_stats.setText(summary_text)
+        
+        # Автоматически показываем диалог детального отчета
+        self._show_final_report_dialog()

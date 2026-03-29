@@ -18,7 +18,7 @@ import win32gui
 import win32con
 
 from config import CONFIG
-
+from status_manager import get_stage_status, set_stage_status
 
 def safe_close_com(obj, save=False):
     """Безопасное закрытие COM-объекта (книги или документа)."""
@@ -209,6 +209,13 @@ class Stage4Worker(QThread):
                     "Результат": "Ожидание"
                 }
                 
+                if get_stage_status(p_folder, "stage4"):
+                    self.log.emit(f"   ⏭ Этап 4 уже завершён, пропускаем.")
+                    point_report["Результат"] = "⚪ Пропущен"
+                    report_data.append(point_report)
+                    processed_count += 1
+                    continue
+                
                 work_wb = None
                 doc = None
 
@@ -314,6 +321,9 @@ class Stage4Worker(QThread):
                         self.info.emit(f"{p_name} — отчет создан", "done")
                         point_report["Слияние Word"] = True
                         point_report["Результат"] = "✅ Успешно"
+                        
+                        set_stage_status(p_folder, "stage4", True)
+                        
                         processed_count += 1
                     except Exception as e:
                         self.log.emit(f"   ❌ [Word] Ошибка: {e}")

@@ -6,6 +6,16 @@ import tempfile
 import re
 from PIL import Image
 from PySide6.QtCore import QThread, Signal
+from status_manager import get_stage_status, set_stage_status
+
+def is_cell_red(cell):
+    """Проверяет наличие красной заливки в ячейке Word через XML."""
+    shd_elems = cell._element.xpath('.//w:shd')
+    for shd in shd_elems:
+        fill = shd.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}fill')
+        if fill and fill.upper() in ('FF0000', 'RED'):
+            return True
+    return False
 
 class Stage5Worker(QThread):
     """Этап 6 (был 5): Вставка картинок в Отчет.docx на основе цвета."""
@@ -96,6 +106,20 @@ class Stage5Worker(QThread):
                 
                 p_name = os.path.basename(p_folder)
                 pt_num = p_name[2:] if p_name.startswith("п.") else p_name
+                
+                # --- Проверка статуса (Инкрементальная логика) ---
+                if get_stage_status(p_folder, "stage5"):
+                    self.log.emit(f"\n── {p_name} ──")
+                    self.log.emit("   ⏭ Этап 6 уже завершён, пропускаем.")
+                    report_data.append({
+                        "№ Пункта": pt_num,
+                        "Фото": "✔",
+                        "Результат": "⚪ Пропущен"
+                    })
+                    prog_val = 10 + int((i + 1) / len(point_folders) * 90)
+                    self.progress.emit(prog_val)
+                    continue
+                    
                 self.info.emit(f"Обработка фото для {p_name}...", "wait")
                 self.log.emit(f"\n── {p_name} ──")
                 
@@ -291,7 +315,8 @@ class Stage5Worker(QThread):
                         if target_table:
                             rows_deleted = 0
                             # Идем с конца, чтобы не сбить индексы при удалении XML узлов
-                            for row in reversed(target_table.rows[1:]): # пропускаем первую строку (заголовок)
+                            # Пропускаем первые две строки (подразумеваем сложный заголовок)
+                            for row in reversed(target_table.rows[2:]): 
                                 is_empty = True
                                 # Проверяем ячейки с 6 по 12 (индексы 5-11, счет с 0)
                                 if len(row.cells) > 5:
@@ -318,6 +343,16 @@ class Stage5Worker(QThread):
                                     row.height = docx.shared.Cm(0.45)
                                     row.height_rule = docx.enum.table.WD_ROW_HEIGHT_RULE.EXACTLY
                             
+                            # 3. Перенумерация первого столбца (№ п/п)
+                            if len(target_table.rows) > 2:
+                                counter = 1
+                                # Идем по всем строкам после заголовка (начиная с третьей)
+                                for row in target_table.rows[2:]:
+                                    if len(row.cells) > 0:
+                                        row.cells[0].text = str(counter)
+                                        counter += 1
+                                self.log.emit(f"   ✓ Выполнена перенумерация первого столбца (всего: {counter-1} поз.)")
+                            
                             if rows_deleted > 0:
                                 self.log.emit(f"   ✓ Из таблицы удалено строк: {rows_deleted}")
                             else:
@@ -328,12 +363,60 @@ class Stage5Worker(QThread):
                         else:
                             self.log.emit("   ⚠ Таблица результатов ультразвуковой толщинометрии не найдена.")
                             
+                        # --- НОВАЯ ЛОГИКА: ПРОВЕРКА ТАБЛИЦЫ Г.3 ---
+                        target_g3 = None
+                        waiting_for_g3 = False
+                        for block in iter_block_items(clean_doc):
+                            if isinstance(block, Paragraph):
+                                if "Г.3" in block.text and "остаточного ресурса" in block.text:
+                                    waiting_for_g3 = True
+                            elif isinstance(block, Table) and waiting_for_g3:
+                                target_g3 = block
+                                break
+                                
+                        warning_msg = ""
+                        if target_g3:
+                            red_c5 = False
+                            red_c6 = False
+                            for row in target_g3.rows:
+                                if len(row.cells) > 5 and is_cell_red(row.cells[5]):
+                                    red_c5 = True
+                                if len(row.cells) > 6 and is_cell_red(row.cells[6]):
+                                    red_c6 = True
+                            
+                            if red_c5 and red_c6:
+                                warning_msg = f"В Пункте №{pt_num} скорость коррозии и остаточный ресурс не соответствуют норме."
+                            elif red_c5:
+                                warning_msg = f"В Пункте №{pt_num} скорость коррозии не соответствует норме."
+                            elif red_c6:
+                                warning_msg = f"В Пункте №{pt_num} остаточный ресурс не соответствует норме."
+                                
+                            if warning_msg:
+                                self.log.emit(f"   ⚠ Обнаружено несоответствие норме: {warning_msg}")
+                                set_stage_status(p_folder, "stage5_warning", warning_msg)
+                        else:
+                            self.log.emit("   ⚠ Таблица Г.3 не найдена.")
+                            
                     except Exception as clean_ex:
                         self.log.emit(f"   ❌ Ошибка при очистке таблиц: {clean_ex}")
 
                     total = r_in + b_in
                     self.log.emit(f"   ✅ Отчет {p_name} готов. ФОТО: {total}")
-                    point_res["Результат"] = "✅ Успешно" if total > 0 else "⚠️ Пропущено"
+                    
+                    # --- Сохраняем успешный статус ---
+                    set_stage_status(p_folder, "stage5", True)
+                    
+                    # Очистка исходных шаблонов
+                    try:
+                        for tmpl in ["ПНОС_ТТП.docx"]:
+                            p_tmpl = os.path.join(p_folder, tmpl)
+                            if os.path.exists(p_tmpl):
+                                os.remove(p_tmpl)
+                        self.log.emit("   🧹 Шаблон Word (ПНОС_ТТП.docx) удален из папки.")
+                    except Exception as e:
+                        self.log.emit(f"   ⚠ Не удалось удалить шаблон: {e}")
+                    
+                    point_res["Результат"] = "✅ Успешно" if total > 0 else "⚠️ Без фото"
                     processed_count += 1
                 except Exception as ex:
                     self.log.emit(f"   ❌ Ошибка Word: {ex}")

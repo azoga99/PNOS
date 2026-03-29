@@ -23,6 +23,7 @@ import win32gui
 import win32con
 
 from config import CONFIG
+from status_manager import get_stage_status, set_stage_status
 
 
 # =====================================================================
@@ -285,13 +286,27 @@ class Stage3Worker(QThread):
                 if self._is_cancelled:
                     self.log.emit("\n❌ Выполнение отменено пользователем!")
                     break
-
                 p_name = os.path.basename(p_folder)
+                p_number_str = p_name[2:] if p_name.startswith("п.") else p_name
+                
+                # --- Проверка статуса (Инкрементальная логика) ---
+                if get_stage_status(p_folder, "stage3"):
+                    self.log.emit(f"\n── {p_name} ──")
+                    self.log.emit("   ⏭ Этап 3 уже завершён, пропускаем.")
+                    report_data.append({
+                        "№ Пункта": p_number_str,
+                        "Паспорт": "✔",
+                        "Excel": "✔",
+                        "Сводные": "✔",
+                        "Результат": "⚪ Пропущен"
+                    })
+                    processed_count += 1
+                    continue
+                
                 self.info.emit(f"Обработка {p_name}...", "wait")
                 self.log.emit(f"\n── {p_name} ──")
                 
                 # Парсим номер пункта из папки "п.1234"
-                p_number_str = p_name[2:] if p_name.startswith("п.") else p_name
                 try:
                     p_number = int(p_number_str)
                 except ValueError:
@@ -371,6 +386,16 @@ class Stage3Worker(QThread):
                     for var_name, cell_addr in macro_cfg.get("DOCVARIABLE_MAP", {}).items():
                         v = dv.get(var_name)
                         if v is not None:
+                            # Специальная обработка для давления (переменная F08, ячейка B18)
+                            if var_name == "F08" and isinstance(v, str) and "(" in v and ")" in v:
+                                try:
+                                    start = v.find("(") + 1
+                                    end = v.find(")")
+                                    extracted = v[start:end].strip()
+                                    v = extracted.replace('.', ',')
+                                except Exception:
+                                    pass # если что-то пошло не так, оставляем как есть
+                                    
                             ws.Range(cell_addr).Value = v
                         else:
                             self.log.emit(f"   [!] У Word-файла нет переменной «{var_name}»")
@@ -440,6 +465,10 @@ class Stage3Worker(QThread):
                     self.log.emit(f"   ✓ Успех. Данные перенесены, макрос выполнен.")
                     self.info.emit(f"{p_name} — макрос выполнен", "done")
                     point_report["Результат"] = "✅ Успешно"
+                    
+                    # --- Сохраняем успешный статус ---
+                    set_stage_status(p_folder, "stage3", True)
+                    
                     processed_count += 1
 
                 except Exception as ex:

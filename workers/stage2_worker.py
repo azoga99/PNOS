@@ -22,6 +22,7 @@ import docx
 # Импорт конфигурации и утилит из Этапа 3
 from config import CONFIG
 from workers.stage3_worker import DialogKiller, safe_close_com
+from status_manager import get_stage_status, set_stage_status
 
 
 def find_folder_fuzzy(base: str, target: str, cutoff: float = 0.7) -> str | None:
@@ -167,6 +168,13 @@ class Stage2Worker(QThread):
                     "Результат": "Ожидание"
                 }
                 
+                if get_stage_status(p_folder, "stage2"):
+                    self.log.emit(f"   ⏭ Этап 2 уже завершён, пропускаем.")
+                    point_report["Результат"] = "⚪ Пропущен"
+                    report_data.append(point_report)
+                    processed_count += 1
+                    continue
+                
                 work_wb = None
                 doc = None
 
@@ -291,6 +299,8 @@ class Stage2Worker(QThread):
                     work_wb.Save()
                     work_wb.Close()
                     work_wb = None
+                    
+                    set_stage_status(p_folder, "stage2", True)
 
                     self.log.emit(f"   ✓ Успех. Таблица №3 перенесена.")
                     self.info.emit(f"п.{pt_num} — таблица перенесена", "done")

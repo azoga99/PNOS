@@ -60,7 +60,7 @@ class SettingsPage(QWidget):
         g1_layout.addWidget(lbl_epb_desc)
 
         self.chk_auto = QCheckBox("Автоматический режим (остановка только на ручном шаге 3)")
-        self.chk_auto.setChecked(False)
+        self.chk_auto.setChecked(True)
         self.chk_auto.setStyleSheet("font-size: 14px; font-weight: bold; color: #1e293b; margin-top: 10px;")
         g1_layout.addWidget(self.chk_auto)
 
