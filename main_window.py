@@ -46,8 +46,11 @@ class MainWindow(QMainWindow):
 
         self._workers = {}
         self._stage_results = {} # Храним итоги для общего отчета
+        self._completed_stages = set() # Номера успешно завершенных этапов (0-5)
         self._start_time = None
         self._is_stopping = False
+        
+        self.setWindowIcon(QIcon("resources/icon.ico"))
         self._setup_ui()
 
     def _setup_ui(self):
@@ -339,7 +342,6 @@ class MainWindow(QMainWindow):
         for i, btn in enumerate(self.nav_buttons):
             btn.setChecked(i == index)
         self.btn_settings.setChecked(index == 7)
-        self._update_global_progress()
 
     def _setup_page1(self):
         """Создает UI для первого этапа (Настройки и парсинг)."""
@@ -640,6 +642,7 @@ class MainWindow(QMainWindow):
         self.btn_start_stage1.setEnabled(True)
         
         if success:
+            self._completed_stages.add(0)
             if len(self.nav_buttons) > 1:
                 self._switch_page(1)
                 
@@ -807,6 +810,7 @@ class MainWindow(QMainWindow):
         btn.setText(btn.property("original_text"))
         btn.setEnabled(True)
         if success:
+            self._completed_stages.add(step_idx)
             self._add_activity(step_idx, "Этап успешно завершен!", "done")
             # Активировать следующий этап если есть
             next_actual_stage = step_idx + 1
@@ -826,9 +830,10 @@ class MainWindow(QMainWindow):
         self._update_global_progress()
 
     def _update_global_progress(self):
-        idx = self.pages_stack.currentIndex()
-        if idx > 6: idx = 6
-        self.global_progress.setValue(int(idx * (100.0 / 6.0)))
+        """Обновляет прогресс-бар на основе реально выполненных этапов."""
+        completed_count = len(self._completed_stages)
+        # Всего 6 этапов (0-5)
+        self.global_progress.setValue(int(completed_count * (100.0 / 6.0)))
 
     def _force_stop_active_stage(self):
         """Принудительная остановка текущего процесса и очистка COM."""
