@@ -7,6 +7,7 @@
 import os
 import sys
 import tempfile
+import zipfile
 import requests
 
 from PySide6.QtCore import QThread, Signal
@@ -71,13 +72,13 @@ class UpdateWorker(QThread):
             file_size = 0
             for asset in release.get("assets", []):
                 name = asset.get("name", "").lower()
-                if name.endswith(".exe"):
+                if name.endswith(".zip"):
                     download_url = asset["browser_download_url"]
                     file_size = asset.get("size", 0)
                     break
 
             if not download_url:
-                self.finished_ok.emit(False, "❌ В релизе не найден EXE-файл.\nПрикрепите скомпилированный .exe к Release на GitHub.")
+                self.finished_ok.emit(False, f"❌ В релизе не найден ZIP-архив.\nПрикрепите {remote_tag}.zip к Release на GitHub.")
                 return
 
             # ── ШАГ 3: Скачиваем новый EXE ────────────────────────
@@ -91,13 +92,14 @@ class UpdateWorker(QThread):
                 # Режим разработки (python main.py)
                 current_dir = os.path.dirname(os.path.abspath(__file__))
 
-            new_exe_path = os.path.join(current_dir, "PNOS_update.exe")
+            # Путь для временного ZIP
+            temp_zip = os.path.join(current_dir, "update_pkg.zip")
 
             dl_resp = requests.get(download_url, stream=True, timeout=120)
             dl_resp.raise_for_status()
 
             downloaded = 0
-            with open(new_exe_path, "wb") as f:
+            with open(temp_zip, "wb") as f:
                 for chunk in dl_resp.iter_content(chunk_size=65536):
                     if chunk:
                         f.write(chunk)
@@ -107,8 +109,40 @@ class UpdateWorker(QThread):
                             self.download_progress.emit(min(pct, 100))
 
             self.download_progress.emit(100)
+            self.status.emit("Распаковка обновления...")
+
+            # Распаковываем EXE из архива
+            try:
+                with zipfile.ZipFile(temp_zip, 'r') as zf:
+                    # Ищем файл с расширением .exe внутри (обычно это ПНОС.exe)
+                    exe_inside = None
+                    for info in zf.infolist():
+                        if info.filename.lower().endswith(".exe"):
+                            exe_inside = info.filename
+                            break
+                    
+                    if not exe_inside:
+                        os.remove(temp_zip)
+                        self.finished_ok.emit(False, "❌ Внутри ZIP-архива не найден файл .exe")
+                        return
+                        
+                    # Извлекаем и переименовываем во временный путь для апдейтера
+                    zf.extract(exe_inside, current_dir)
+                    extracted_path = os.path.join(current_dir, exe_inside)
+                    
+                    # Если имя внутри было не PNOS_update.exe, переименовываем подготовленный файл
+                    if os.path.exists(new_exe_path):
+                        os.remove(new_exe_path)
+                    os.rename(extracted_path, new_exe_path)
+                    
+                os.remove(temp_zip)
+            except Exception as e:
+                if os.path.exists(temp_zip): os.remove(temp_zip)
+                self.finished_ok.emit(False, f"❌ Ошибка при распаковке: {e}")
+                return
+
             self.new_exe_path = new_exe_path
-            self.status.emit("Скачивание завершено!")
+            self.status.emit("Обновление готово!")
 
             self.finished_ok.emit(True,
                 f"✅ Версия {remote_tag} скачана!\n"
