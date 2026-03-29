@@ -16,7 +16,7 @@ from version import APP_VERSION
 # ─── Константы ──────────────────────────────────────────────────
 GITHUB_REPO = "azoga99/PNOS"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-EXE_ASSET_NAME = "PNOS.exe"  # Имя файла в GitHub Release Assets
+EXE_ASSET_NAME = "ПНОС.exe"  # Имя файла в GitHub Release Assets
 
 
 def _parse_version(tag: str) -> tuple:
