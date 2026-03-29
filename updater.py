@@ -125,15 +125,25 @@ class UpdateWorker(QThread):
                         os.remove(temp_zip)
                         self.finished_ok.emit(False, "❌ Внутри ZIP-архива не найден файл .exe")
                         return
-                        
-                    # Извлекаем и переименовываем во временный путь для апдейтера
-                    zf.extract(exe_inside, current_dir)
-                    extracted_path = os.path.join(current_dir, exe_inside)
                     
-                    # Если имя внутри было не PNOS_update.exe, переименовываем подготовленный файл
-                    if os.path.exists(new_exe_path):
-                        os.remove(new_exe_path)
-                    os.rename(extracted_path, new_exe_path)
+                    # Чтобы избежать ошибки [Errno 13] Permission denied (если имя внутри ZIP совпадает с запущенным ПНОС.exe),
+                    # мы распаковываем во временную папку, а не в текущую.
+                    tmp_extract_dir = tempfile.mkdtemp(dir=current_dir)
+                    try:
+                        zf.extract(exe_inside, tmp_extract_dir)
+                        extracted_path = os.path.join(tmp_extract_dir, exe_inside)
+                        
+                        # Если имя внутри было не PNOS_update.exe, переименовываем подготовленный файл
+                        if os.path.exists(new_exe_path):
+                            os.remove(new_exe_path)
+                        os.rename(extracted_path, new_exe_path)
+                    finally:
+                        # Удаляем временную папку и её содержимое
+                        if os.path.exists(extracted_path):
+                            try: os.remove(extracted_path)
+                            except: pass
+                        try: os.rmdir(tmp_extract_dir)
+                        except: pass
                     
                 os.remove(temp_zip)
             except Exception as e:
