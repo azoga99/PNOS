@@ -435,8 +435,8 @@ class MainWindow(QMainWindow):
 
         # Интегрированный отчет для Этапа 1
         self.stage1_report_table = QTableWidget()
-        self.stage1_report_table.setColumnCount(5)
-        self.stage1_report_table.setHorizontalHeaderLabels(["№ Пункта", "Паспорт", "Первичка", "Стар. ЭПБ", "Результат"])
+        self.stage1_report_table.setColumnCount(7)
+        self.stage1_report_table.setHorizontalHeaderLabels(["№ Пункта", "Паспорт", "Первичка", "Стар. ЭПБ", "Исполнит.", "Акт отбр.", "Результат"])
         self.stage1_report_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.stage1_report_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.stage1_report_table.setFixedHeight(180)
@@ -609,25 +609,34 @@ class MainWindow(QMainWindow):
             point = str(d.get("point", ""))
             status_text = d.get("status", "")
             folders = d.get("folders", {})
+            optional = d.get("optional", {})
             
             # Колонка 0: Пункт
             self.stage1_report_table.setItem(row_idx, 0, QTableWidgetItem(point))
             
-            # Колонки 1,2,3 - Папки
+            # Колонки 1,2,3 - Обязательные папки
             col_map = {"Паспорт": 1, "Первичка": 2, "Стар. ЭПБ": 3}
             for folder_name, col_idx in col_map.items():
                 f_status = folders.get(folder_name, False)
                 item = QTableWidgetItem("✅" if f_status else "❌")
                 item.setTextAlignment(Qt.AlignCenter)
                 self.stage1_report_table.setItem(row_idx, col_idx, item)
+
+            # Колонки 4,5 - Необязательные папки
+            opt_map = {"Исполнительная": 4, "Акт отбраковки": 5}
+            for opt_name, col_idx in opt_map.items():
+                opt_status = optional.get(opt_name, False)
+                item = QTableWidgetItem("✅" if opt_status else "—")
+                item.setTextAlignment(Qt.AlignCenter)
+                self.stage1_report_table.setItem(row_idx, col_idx, item)
                 
-            # Колонка 4 - Общий результат
+            # Колонка 6 - Общий результат
             res_item = QTableWidgetItem(status_text)
             if "успешно" in status_text.lower():
                 res_item.setForeground(QColor("#2d6a4f"))
             else:
                 res_item.setForeground(QColor("#e63946"))
-            self.stage1_report_table.setItem(row_idx, 4, res_item)
+            self.stage1_report_table.setItem(row_idx, 6, res_item)
             
         self.stage1_report_table.show()
 

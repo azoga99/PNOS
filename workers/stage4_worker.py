@@ -7,8 +7,12 @@
 """
 
 import os
+import re
+import difflib
+import math
 import threading
 import time
+from datetime import datetime
 
 from PySide6.QtCore import QThread, Signal
 
@@ -136,6 +140,353 @@ class Stage4Worker(QThread):
 
     def cancel(self):
         self._is_cancelled = True
+
+    def _find_specification_file(self, p_folder: str) -> str | None:
+        """Ищет файл 'Спецификация трубопровода.docx' в папке Первичка."""
+        pervichka = None
+        for d in os.listdir(p_folder):
+            if os.path.isdir(os.path.join(p_folder, d)):
+                matches = difflib.get_close_matches("первичка", [d.lower()], n=1, cutoff=0.7)
+                if matches:
+                    pervichka = os.path.join(p_folder, d)
+                    break
+        if not pervichka:
+            return None
+
+        for f in os.listdir(pervichka):
+            if f.startswith("~$"):
+                continue
+            if "спецификация" in f.lower() and f.lower().endswith((".docx", ".doc")):
+                return os.path.join(pervichka, f)
+        return None
+
+    def _parse_specification(self, wd_app, spec_path: str) -> dict:
+        """
+        Парсит таблицу из 'Спецификация трубопровода.docx'.
+        Возвращает словарь: {номер_str: {"dy": str, "py": str, "steel": str}}
+        """
+        result = {}
+        spec_doc = None
+        try:
+            spec_doc = wd_app.Documents.Open(spec_path, ReadOnly=True, Visible=False)
+            if spec_doc.Tables.Count == 0:
+                self.log.emit(f"   ⚠ [Спецификация] Таблица не найдена в файле")
+                return result
+
+            table = spec_doc.Tables(1)
+            rows_count = table.Rows.Count
+            cols_count = table.Columns.Count
+
+            for r in range(1, rows_count + 1):
+                try:
+                    # Столбец 0 (индекс 1 в COM) — номер
+                    cell_num_text = table.Cell(r, 1).Range.Text.strip().rstrip("\r\x07")
+                    # Убираем все нечисловые символы для сравнения
+                    num_clean = cell_num_text.strip()
+                    if not num_clean:
+                        continue
+
+                    # Столбец 1 (индекс 2 в COM) — описание с Dy и Py
+                    if cols_count >= 2:
+                        desc_text = table.Cell(r, 2).Range.Text.strip().rstrip("\r\x07")
+                    else:
+                        desc_text = ""
+
+                    # Столбец 5 (индекс 6 в COM) — марка стали
+                    steel = ""
+                    if cols_count >= 6:
+                        steel = table.Cell(r, 6).Range.Text.strip().rstrip("\r\x07")
+
+                    # Извлекаем Dy и Py из описания
+                    dy_match = re.search(r'[DdДд][yуYУ]\s*=?\s*(\d+)', desc_text)
+                    py_match = re.search(r'[PpРр][yуYУ]\s*=?\s*(\d+)', desc_text)
+
+                    dy_val = dy_match.group(1) if dy_match else ""
+                    py_val = py_match.group(1) if py_match else ""
+
+                    result[num_clean] = {
+                        "dy": dy_val,
+                        "py": py_val,
+                        "steel": steel
+                    }
+                except Exception:
+                    continue
+
+            self.log.emit(f"   ✓ [Спецификация] Извлечено записей: {len(result)}")
+        except Exception as e:
+            self.log.emit(f"   ⚠ [Спецификация] Ошибка чтения: {e}")
+        finally:
+            if spec_doc:
+                try:
+                    spec_doc.Close(SaveChanges=False)
+                except Exception:
+                    pass
+        return result
+
+    def _fill_report_table(self, doc, spec_data: dict) -> int:
+        """
+        Заполняет столбцы 3, 4, 5 в таблице 'Таблица результатов обследования'.
+        Возвращает количество заполненных строк.
+        """
+        filled = 0
+        target_table = None
+
+        # Ищем таблицу после текста "Таблица результатов обследования"
+        try:
+            find_obj = doc.Content.Find
+            find_obj.ClearFormatting()
+            found = find_obj.Execute(FindText="Таблица результатов обследования")
+
+            if not found:
+                self.log.emit(f"   ⚠ [Отчет] Текст 'Таблица результатов обследования' не найден")
+                return 0
+
+            # Получаем позицию найденного текста и ищем первую таблицу после неё
+            found_range = find_obj.Parent
+            found_pos = found_range.End
+
+            for t_idx in range(1, doc.Tables.Count + 1):
+                tbl = doc.Tables(t_idx)
+                if tbl.Range.Start >= found_pos:
+                    target_table = tbl
+                    break
+
+            if not target_table:
+                self.log.emit(f"   ⚠ [Отчет] Таблица после 'Таблица результатов обследования' не найдена")
+                return 0
+
+            rows_count = target_table.Rows.Count
+            for r in range(1, rows_count + 1):
+                try:
+                    # Столбец 1 (индекс 2 в COM) — номер для поиска
+                    cell_text = target_table.Cell(r, 2).Range.Text.strip().rstrip("\r\x07")
+                    num_key = cell_text.strip()
+
+                    if num_key in spec_data:
+                        data = spec_data[num_key]
+                        # Столбец 3 (индекс 4 в COM) — Dy
+                        if data["dy"]:
+                            target_table.Cell(r, 4).Range.Text = data["dy"]
+                        # Столбец 4 (индекс 5 в COM) — Py
+                        if data["py"]:
+                            target_table.Cell(r, 5).Range.Text = data["py"]
+                        # Столбец 5 (индекс 6 в COM) — Марка стали
+                        if data["steel"]:
+                            target_table.Cell(r, 6).Range.Text = data["steel"]
+                        filled += 1
+                except Exception:
+                    continue
+
+        except Exception as e:
+            self.log.emit(f"   ⚠ [Отчет] Ошибка заполнения таблицы: {e}")
+
+        return filled
+
+    def _fix_resource_table(self, doc) -> int:
+        """
+        Исправляет таблицы 'Оценка остаточного ресурса' и 'Таблица Г.3':
+        1. Корректирует столбец 1 (S) по числу после 'x' в столбце 0
+        2. Пересчитывает скорость коррозии (стб.5) и остаточный ресурс (стб.6)
+        Возвращает количество исправленных таблиц.
+        """
+        fixed_tables = 0
+        search_texts = ["Оценка остаточного ресурса", "Таблица Г.3"]
+
+        for search_text in search_texts:
+            try:
+                # Создаём новый Range для каждого поиска
+                search_range = doc.Content.Duplicate
+                search_range.Find.ClearFormatting()
+                found = search_range.Find.Execute(FindText=search_text)
+
+                if not found:
+                    self.log.emit(f"   ℹ [Ресурс] Текст '{search_text}' не найден")
+                    continue
+
+                found_pos = search_range.End
+
+                # Ищем первую таблицу после найденного текста
+                target_table = None
+                for t_idx in range(1, doc.Tables.Count + 1):
+                    tbl = doc.Tables(t_idx)
+                    if tbl.Range.Start >= found_pos:
+                        target_table = tbl
+                        break
+
+                if not target_table:
+                    self.log.emit(f"   ⚠ [Ресурс] Таблица после '{search_text}' не найдена")
+                    continue
+
+                rows_count = target_table.Rows.Count
+                rows_fixed = 0
+
+                for r in range(2, rows_count + 1):  # Пропускаем заголовок
+                    try:
+                        # --- Столбец 0 (COM idx 1): Наименование участка ---
+                        name_text = target_table.Cell(r, 1).Range.Text.strip().rstrip("\r\x07")
+
+                        # Извлекаем число после 'x' (латиница/кириллица)
+                        x_match = re.search(r'[xхXХ](\d+[,.]\d+|\d+)', name_text)
+                        if not x_match:
+                            continue
+
+                        correct_s_float = float(x_match.group(1).replace(',', '.'))
+
+                        # --- Столбец 1 (COM idx 2): S — исполнительная толщина ---
+                        current_s_text = target_table.Cell(r, 2).Range.Text.strip().rstrip("\r\x07")
+                        try:
+                            current_s = float(current_s_text.replace(',', '.'))
+                        except ValueError:
+                            current_s = 0.0
+
+                        if abs(current_s - correct_s_float) > 0.01:
+                            new_s_str = f"{correct_s_float:.1f}".replace('.', ',')
+                            target_table.Cell(r, 2).Range.Text = new_s_str
+                            self.log.emit(f"   [Ресурс] Строка {r}: S исправлено {current_s_text} -> {new_s_str}")
+                            current_s = correct_s_float
+
+                        # --- Читаем остальные столбцы ---
+                        sf_text = target_table.Cell(r, 3).Range.Text.strip().rstrip("\r\x07")
+                        si_text = target_table.Cell(r, 4).Range.Text.strip().rstrip("\r\x07")
+                        t_text = target_table.Cell(r, 5).Range.Text.strip().rstrip("\r\x07")
+
+                        sf = float(sf_text.replace(',', '.'))
+                        si = float(si_text.replace(',', '.'))
+                        t_val = float(t_text.replace(',', '.'))
+
+                        # --- Расчёт скорости коррозии ---
+                        if t_val > 0:
+                            speed = (current_s - sf) / t_val
+                        else:
+                            speed = 0.0
+
+                        # --- Запись столбца 5 (скорость коррозии, 3 знака) ---
+                        if speed <= 0:
+                            target_table.Cell(r, 6).Range.Text = "-"
+                            target_table.Cell(r, 7).Range.Text = "-"
+                        else:
+                            speed_str = f"{speed:.3f}".replace('.', ',')
+                            target_table.Cell(r, 6).Range.Text = speed_str
+
+                            # --- Расчёт остаточного ресурса ---
+                            resource = (sf - si) / speed
+                            if resource <= 0:
+                                target_table.Cell(r, 7).Range.Text = "-"
+                            else:
+                                # Округляем вниз до целого числа
+                                resource_int = math.floor(resource)
+                                target_table.Cell(r, 7).Range.Text = str(resource_int)
+
+                        rows_fixed += 1
+                    except Exception as e:
+                        self.log.emit(f"   ⚠ [Ресурс] Ошибка в строке {r}: {e}")
+                        continue
+
+                self.log.emit(f"   ✓ [Ресурс] Таблица '{search_text}': обработано {rows_fixed} строк")
+                fixed_tables += 1
+
+            except Exception as e:
+                self.log.emit(f"   ⚠ [Ресурс] Ошибка обработки '{search_text}': {e}")
+
+        return fixed_tables
+
+    def _fix_attestation_certificate(self, doc) -> bool:
+        """
+        Заменяет номер свидетельства об аттестации ЛНК в зависимости от даты акта.
+        Порог: 20.03.2026.
+        До — №ЛНК-057А0459 (до 20 марта 2026 г.), области с "2.1.,"
+        После — №ЛНК-057А0516 (до 20 марта 2029 г.), области с "2.1,"
+        Возвращает True если замены были выполнены.
+        """
+        OLD_CERT = "ЛНК-057А0459"
+        NEW_CERT = "ЛНК-057А0516"
+        THRESHOLD = datetime(2026, 3, 20)
+
+        # Словарь русских месяцев для парсинга даты
+        MONTHS_RU = {
+            "января": 1, "февраля": 2, "марта": 3, "апреля": 4,
+            "мая": 5, "июня": 6, "июля": 7, "августа": 8,
+            "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12
+        }
+
+        # --- Шаг 1: Найти дату акта ---
+        act_date = None
+        try:
+            # Ищем текст вида "АКТ №... от DD месяц YYYY г." по всем абзацам
+            for para in doc.Paragraphs:
+                para_text = para.Range.Text
+                if "АКТ" not in para_text or " от " not in para_text:
+                    continue
+                # Извлекаем дату: "от DD месяц YYYY г."
+                date_match = re.search(
+                    r'от\s+(\d{1,2})\s+([а-яё]+)\s+(\d{4})\s+г\.',
+                    para_text, re.IGNORECASE
+                )
+                if date_match:
+                    day = int(date_match.group(1))
+                    month_name = date_match.group(2).lower()
+                    year = int(date_match.group(3))
+                    month = MONTHS_RU.get(month_name, 0)
+                    if month > 0:
+                        act_date = datetime(year, month, day)
+                        self.log.emit(f"   [Свидетельство] Дата акта: {act_date.strftime('%d.%m.%Y')}")
+                        break
+        except Exception as e:
+            self.log.emit(f"   ⚠ [Свидетельство] Ошибка поиска даты: {e}")
+
+        if act_date is None:
+            self.log.emit(f"   ⚠ [Свидетельство] Дата акта не найдена, пропускаем замену")
+            return False
+
+        is_before = act_date < THRESHOLD
+        made_changes = False
+
+        # --- Шаг 2: Замена номера свидетельства и даты действия ---
+        try:
+            if not is_before:
+                # Дата >= 20.03.2026 → меняем номер и дату действия
+                # Замена номера по всему документу (покрывает все листы актов)
+                find_obj = doc.Content.Find
+                find_obj.ClearFormatting()
+                find_obj.Replacement.ClearFormatting()
+                find_obj.Execute(
+                    OLD_CERT,       # FindText
+                    False,          # MatchCase
+                    False,          # MatchWholeWord
+                    False,          # MatchWildcards
+                    False,          # MatchSoundsLike
+                    False,          # MatchAllWordForms
+                    True,           # Forward
+                    1,              # Wrap = wdFindContinue
+                    False,          # Format
+                    NEW_CERT,       # ReplaceWith
+                    2               # Replace = wdReplaceAll
+                )
+                self.log.emit(f"   [Свидетельство] Номер заменён: {OLD_CERT} → {NEW_CERT}")
+                made_changes = True
+
+                # Замена даты действия
+                find_obj2 = doc.Content.Find
+                find_obj2.ClearFormatting()
+                find_obj2.Replacement.ClearFormatting()
+                find_obj2.Execute(
+                    "до 20 марта 2026 г.",
+                    False, False, False, False, False,
+                    True, 1, False,
+                    "до 20 марта 2029 г.",
+                    2
+                )
+                self.log.emit(f"   [Свидетельство] Дата действия: 2026 → 2029")
+                made_changes = True
+
+                self.log.emit(f"   ✓ [Свидетельство] Применён новый сертификат (дата акта ≥ 20.03.2026)")
+            else:
+                self.log.emit(f"   ✓ [Свидетельство] Оставлен старый сертификат (дата акта < 20.03.2026)")
+
+        except Exception as e:
+            self.log.emit(f"   ⚠ [Свидетельство] Ошибка замены: {e}")
+
+        return made_changes
 
     def run(self):
         self.log.emit("═" * 40)
@@ -318,8 +669,38 @@ class Stage4Worker(QThread):
                         doc.SaveAs2(out_path, 16)
                         
                         self.log.emit(f"   ✓ [Word] Отчет готов: {out_name}")
-                        self.info.emit(f"{p_name} — отчет создан", "done")
                         point_report["Слияние Word"] = True
+
+                        # --- ШАГ 5: Заполнение таблицы из Спецификации ---
+                        spec_path = self._find_specification_file(p_folder)
+                        if spec_path:
+                            self.action_update.emit(f"[{pt_num_str}] Заполнение из спецификации...")
+                            self.log.emit(f"   [Спецификация] Найден файл: {os.path.basename(spec_path)}")
+                            spec_data = self._parse_specification(wd_app, spec_path)
+                            if spec_data:
+                                filled_count = self._fill_report_table(doc, spec_data)
+                                self.log.emit(f"   ✓ [Отчет] Заполнено строк из спецификации: {filled_count}")
+                                if filled_count > 0:
+                                    doc.Save()
+                            else:
+                                self.log.emit(f"   ⚠ [Спецификация] Не удалось извлечь данные")
+                        else:
+                            self.log.emit(f"   ℹ [Спецификация] Файл не найден в Первичке, пропускаем")
+
+                        # --- ШАГ 6: Перерасчёт таблицы остаточного ресурса ---
+                        self.action_update.emit(f"[{pt_num_str}] Перерасчёт ресурса...")
+                        fixed_count = self._fix_resource_table(doc)
+                        if fixed_count > 0:
+                            doc.Save()
+                            self.log.emit(f"   ✓ [Ресурс] Пересчитано таблиц: {fixed_count}")
+
+                        # --- ШАГ 7: Замена свидетельства об аттестации ЛНК ---
+                        self.action_update.emit(f"[{pt_num_str}] Проверка свидетельства ЛНК...")
+                        cert_changed = self._fix_attestation_certificate(doc)
+                        if cert_changed:
+                            doc.Save()
+
+                        self.info.emit(f"{p_name} — отчет создан", "done")
                         point_report["Результат"] = "✅ Успешно"
                         
                         set_stage_status(p_folder, "stage4", True)

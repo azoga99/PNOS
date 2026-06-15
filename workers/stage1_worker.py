@@ -131,6 +131,7 @@ class Stage1Worker(QThread):
                         "number": p_num,
                         "remote_path": None,
                         "target_paths": {},
+                        "optional_paths": {},
                         "is_valid": False,
                         "found_in": None,
                         "missing": []
@@ -164,6 +165,13 @@ class Stage1Worker(QThread):
                             info["target_paths"][target] = target_path
                             if not target_path:
                                 info["missing"].append(target)
+
+                        # Проверка необязательных подпапок (Исполнительная, Акт отбраковки)
+                        for opt_folder in CONFIG.get("OPTIONAL_FOLDERS", []):
+                            opt_path = await api_items.find_folder_by_name(session, folder_path, opt_folder)
+                            info["optional_paths"][opt_folder] = opt_path
+                            if opt_path:
+                                self.log.emit(f"   п.{p_num} 📂 Найдена: {opt_folder}")
 
                         info["is_valid"] = True  # Всегда скачиваем, если папка пункта существует
                         
@@ -279,7 +287,19 @@ class Stage1Worker(QThread):
                                 dl_tasks.append(
                                     api_items.download_folder_recursive(session, t_path, local_target, log_callback=self.log.emit)
                                 )
-                    
+
+                    # Скачиваем необязательные папки (если найдены)
+                    for opt_name, opt_path in point.get("optional_paths", {}).items():
+                        if opt_path:
+                            local_opt = os.path.join(local_folder, opt_name)
+                            if os.path.exists(local_opt) and os.listdir(local_opt):
+                                self.log.emit(f"   п.{p_num} 📂 {opt_name}: Уже скачано, пропускаем")
+                            else:
+                                self.log.emit(f"   п.{p_num} 📂 {opt_name} (необяз.):")
+                                dl_tasks.append(
+                                    api_items.download_folder_recursive(session, opt_path, local_opt, log_callback=self.log.emit)
+                                )
+
                     if dl_tasks:
                         await asyncio.gather(*dl_tasks)
 
@@ -311,12 +331,14 @@ class Stage1Worker(QThread):
                         point_data = valid_points[i]
                         report["created"] += 1
                         folders_status = {tgt: bool(pth) for tgt, pth in point_data["target_paths"].items()}
+                        optional_status = {opt: bool(pth) for opt, pth in point_data.get("optional_paths", {}).items()}
                         has_missing = bool(point_data["missing"])
                         
                         report["details"].append({
                             "point": p_num,
                             "status": "⚠ Частично" if has_missing else "✓ Успешно",
-                            "folders": folders_status
+                            "folders": folders_status,
+                            "optional": optional_status
                         })
 
                 # Добавляем невалидные в отчёт
