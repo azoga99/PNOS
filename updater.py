@@ -6,8 +6,10 @@
 
 import os
 import sys
+import subprocess
 import tempfile
 import zipfile
+import shutil
 import requests
 
 from PySide6.QtCore import QThread, Signal
@@ -17,7 +19,11 @@ from version import APP_VERSION
 # ─── Константы ──────────────────────────────────────────────────
 GITHUB_REPO = "azoga99/PNOS"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-EXE_ASSET_NAME = "ПНОС.exe"  # Имя файла в GitHub Release Assets
+
+# Точное имя ZIP-архива, который нужно прикрепить к GitHub Release.
+# GitHub автоматически добавляет «Source code.zip» — мы его игнорируем,
+# поэтому имя должно совпадать с тем, что загружает разработчик вручную.
+ZIP_ASSET_NAME = "ПНОС.zip"
 
 
 def _parse_version(tag: str) -> tuple:
@@ -35,10 +41,9 @@ def _parse_version(tag: str) -> tuple:
 class UpdateWorker(QThread):
     """Фоновый поток: проверка + скачивание обновлений с GitHub Releases."""
 
-    # Сигналы
-    status = Signal(str)            # Текстовый статус для UI
-    download_progress = Signal(int) # 0-100 прогресс скачивания
-    finished_ok = Signal(bool, str) # (успех?, сообщение)
+    status = Signal(str)             # Текстовый статус для UI
+    download_progress = Signal(int)  # 0-100 прогресс скачивания
+    finished_ok = Signal(bool, str)  # (успех?, сообщение)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -52,7 +57,11 @@ class UpdateWorker(QThread):
 
             resp = requests.get(GITHUB_API_URL, timeout=15)
             if resp.status_code == 404:
-                self.finished_ok.emit(False, "На GitHub пока нет ни одного релиза.\nОпубликуйте первый Release с EXE-файлом.")
+                self.finished_ok.emit(
+                    False,
+                    "На GitHub пока нет ни одного релиза.\n"
+                    "Опубликуйте первый Release с EXE-файлом."
+                )
                 return
             resp.raise_for_status()
 
@@ -65,36 +74,41 @@ class UpdateWorker(QThread):
                 self.finished_ok.emit(True, f"✅ У вас уже последняя версия ({APP_VERSION})!")
                 return
 
-            # ── ШАГ 2: Ищем EXE-файл в Assets ────────────────────
+            # ── ШАГ 2: Ищем ZIP по точному имени ─────────────────
+            # Сравниваем без учёта регистра, чтобы не зависеть от того,
+            # как именно назван файл на GitHub (ПНОС.zip / пнос.zip и т.д.)
             self.status.emit(f"Найдена новая версия: {remote_tag} (текущая: {APP_VERSION})")
 
             download_url = None
             file_size = 0
+            target_name = ZIP_ASSET_NAME.lower()
+
             for asset in release.get("assets", []):
-                name = asset.get("name", "").lower()
-                if name.endswith(".zip"):
+                if asset.get("name", "").lower() == target_name:
                     download_url = asset["browser_download_url"]
                     file_size = asset.get("size", 0)
                     break
 
             if not download_url:
-                self.finished_ok.emit(False, f"❌ В релизе не найден ZIP-архив.\nПрикрепите {remote_tag}.zip к Release на GitHub.")
+                self.finished_ok.emit(
+                    False,
+                    f"❌ В релизе {remote_tag} не найден файл «{ZIP_ASSET_NAME}».\n"
+                    f"Прикрепите архив с таким именем к Release на GitHub."
+                )
                 return
 
-            # ── ШАГ 3: Скачиваем новый EXE ────────────────────────
+            # ── ШАГ 3: Скачиваем ZIP во временную папку системы ──
+            # Используем системный %TEMP% вместо папки с EXE:
+            # это безопасно при любых правах доступа и любых путях.
             self.status.emit("Скачиваем обновление...")
 
-            # Определяем путь для скачивания (рядом с текущим EXE)
             if getattr(sys, 'frozen', False):
-                # Скомпилированный EXE
                 current_dir = os.path.dirname(sys.executable)
             else:
-                # Режим разработки (python main.py)
                 current_dir = os.path.dirname(os.path.abspath(__file__))
 
-            # Пути для файлов
             new_exe_path = os.path.join(current_dir, "PNOS_update.exe")
-            temp_zip = os.path.join(current_dir, "update_pkg.zip")
+            temp_zip = os.path.join(tempfile.gettempdir(), "pnos_update_pkg.zip")
 
             dl_resp = requests.get(download_url, stream=True, timeout=120)
             dl_resp.raise_for_status()
@@ -106,57 +120,64 @@ class UpdateWorker(QThread):
                         f.write(chunk)
                         downloaded += len(chunk)
                         if file_size > 0:
-                            pct = int(downloaded / file_size * 100)
-                            self.download_progress.emit(min(pct, 100))
+                            self.download_progress.emit(min(int(downloaded / file_size * 100), 99))
+
+            # ── ШАГ 4: Проверка целостности скачанного файла ──────
+            # Сравниваем реальный размер с тем, что объявил GitHub.
+            # Расхождение = обрыв соединения или повреждение данных.
+            if file_size > 0:
+                actual_size = os.path.getsize(temp_zip)
+                if actual_size != file_size:
+                    os.remove(temp_zip)
+                    self.finished_ok.emit(
+                        False,
+                        f"❌ Ошибка загрузки: файл повреждён\n"
+                        f"(ожидалось {file_size} байт, получено {actual_size}).\n"
+                        f"Попробуйте ещё раз."
+                    )
+                    return
 
             self.download_progress.emit(100)
             self.status.emit("Распаковка обновления...")
 
-            # Распаковываем EXE из архива
+            # ── ШАГ 5: Распаковываем EXE из архива ───────────────
+            # Распаковка идёт в системный TEMP — избегаем проблем с правами
+            # доступа, если current_dir находится в сетевой папке или Program Files.
             try:
-                with zipfile.ZipFile(temp_zip, 'r') as zf:
-                    # Ищем файл с расширением .exe внутри (обычно это ПНОС.exe)
-                    exe_inside = None
-                    for info in zf.infolist():
-                        if info.filename.lower().endswith(".exe"):
-                            exe_inside = info.filename
-                            break
-                    
+                with zipfile.ZipFile(temp_zip, "r") as zf:
+                    exe_inside = next(
+                        (info.filename for info in zf.infolist()
+                         if info.filename.lower().endswith(".exe")),
+                        None
+                    )
                     if not exe_inside:
                         os.remove(temp_zip)
                         self.finished_ok.emit(False, "❌ Внутри ZIP-архива не найден файл .exe")
                         return
-                    
-                    # Чтобы избежать ошибки [Errno 13] Permission denied (если имя внутри ZIP совпадает с запущенным ПНОС.exe),
-                    # мы распаковываем во временную папку, а не в текущую.
-                    tmp_extract_dir = tempfile.mkdtemp(dir=current_dir)
-                    extracted_path = None
+
+                    tmp_dir = tempfile.mkdtemp()
                     try:
-                        zf.extract(exe_inside, tmp_extract_dir)
-                        extracted_path = os.path.join(tmp_extract_dir, exe_inside)
-                        
-                        # Если имя внутри было не PNOS_update.exe, переименовываем подготовленный файл
-                        if os.path.exists(new_exe_path):
-                            os.remove(new_exe_path)
-                        os.rename(extracted_path, new_exe_path)
+                        zf.extract(exe_inside, tmp_dir)
+                        extracted = os.path.join(tmp_dir, exe_inside)
+                        # os.replace атомарно перезаписывает цель, даже если она уже существует
+                        os.replace(extracted, new_exe_path)
                     finally:
-                        # Удаляем временную папку и её содержимое
-                        if extracted_path and os.path.exists(extracted_path):
-                            try: os.remove(extracted_path)
-                            except: pass
-                        try: os.rmdir(tmp_extract_dir)
-                        except: pass
-                    
+                        shutil.rmtree(tmp_dir, ignore_errors=True)
+
                 os.remove(temp_zip)
+
             except Exception as e:
-                if os.path.exists(temp_zip): os.remove(temp_zip)
+                try:
+                    os.remove(temp_zip)
+                except Exception:
+                    pass
                 self.finished_ok.emit(False, f"❌ Ошибка при распаковке: {e}")
                 return
 
             self.new_exe_path = new_exe_path
             self.status.emit("Обновление готово!")
-
-            self.finished_ok.emit(True,
+            self.finished_ok.emit(
+                True,
                 f"✅ Версия {remote_tag} скачана!\n"
                 f"Нажмите «Установить и перезапустить», чтобы применить обновление."
             )
@@ -173,58 +194,90 @@ class UpdateWorker(QThread):
 
 def apply_update_and_restart(new_exe_path: str):
     """
-    Создаёт .bat скрипт, который:
-    1. Ждёт 2 секунды (пока текущий EXE закроется).
-    2. Удаляет старый EXE.
-    3. Переименовывает PNOS_update.exe → PNOS.exe.
-    4. Запускает новый EXE.
-    5. Удаляет сам себя.
+    Запускает PowerShell-скрипт, который:
+      1. Завершает текущий процесс.
+      2. Удаляет старый EXE (с повтором, пока файл не освободится).
+      3. Перемещает PNOS_update.exe на место старого.
+      4. Убеждается, что файл на месте, и запускает новую версию.
+      5. Удаляет временный .ps1 скрипт.
+
+    Почему PowerShell, а не .bat:
+      - .bat пишется в ASCII/cp1251, из-за чего пути с кириллицей
+        (имя EXE «ПНОС.exe», кириллица в пути к папке) ломаются.
+      - PowerShell работает в Unicode и обрабатывает любые пути без
+        дополнительных трюков (короткие имена, chcp и т.д.).
+      - «-ExecutionPolicy Bypass» разрешает запуск .ps1 для одного
+        конкретного процесса, не меняя системную политику.
     """
-    if getattr(sys, 'frozen', False):
-        current_exe = sys.executable
-    else:
-        # В режиме разработки — просто удаляем скачанный файл
+    if not getattr(sys, 'frozen', False):
+        # В режиме разработки просто чистим скачанный файл
         try:
             os.remove(new_exe_path)
         except Exception:
             pass
         return
 
-    current_dir = os.path.dirname(current_exe)
+    current_exe = sys.executable
     current_name = os.path.basename(current_exe)
-    new_name = os.path.basename(new_exe_path)
 
-    bat_path = os.path.join(current_dir, "_updater.bat")
+    def _ps(s: str) -> str:
+        """Экранирует строку для одинарных кавычек PowerShell ('...')."""
+        return s.replace("'", "''")
 
-    bat_content = f"""@echo off
-chcp 1251 >nul
-echo Обновление ПНОС... Пожалуйста, подождите.
+    # {{ и }} в f-строке Python → { и } в реальном тексте PS1
+    ps1_content = f"""\
+# ПНОС auto-updater — сгенерировано приложением, удалится после запуска
+$old  = '{_ps(current_exe)}'
+$new  = '{_ps(new_exe_path)}'
+$name = '{_ps(current_name)}'
 
-rem Принудительно завершаем все процессы программы
-taskkill /f /im "{current_name}" >nul 2>&1
+taskkill /f /im $name 2>$null | Out-Null
+Start-Sleep -Seconds 3
 
-:retry_del
-timeout /t 3 /nobreak >nul
-if not exist "{current_exe}" goto do_rename
-del /f /q "{current_exe}"
-if exist "{current_exe}" goto retry_del
+# Удаляем старый EXE (повтор при блокировке антивирусом или ОС)
+$tries = 10
+while ((Test-Path $old) -and ($tries -gt 0)) {{
+    Remove-Item -Path $old -Force -ErrorAction SilentlyContinue
+    if (Test-Path $old) {{ Start-Sleep -Seconds 1 }}
+    $tries--
+}}
 
-:do_rename
-rename "{new_exe_path}" "{current_name}"
-if not exist "{os.path.join(current_dir, current_name)}" (
-    timeout /t 2 /nobreak >nul
-    goto do_rename
-)
+# Перемещаем новый EXE на место старого
+$moves = 5
+while ((-not (Test-Path $old)) -and ($moves -gt 0)) {{
+    Move-Item -Path $new -Destination $old -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path $old)) {{ Start-Sleep -Seconds 1 }}
+    $moves--
+}}
 
-echo Запуск новой версии...
-timeout /t 3 /nobreak >nul
-start "" /d "{current_dir}" "{current_name}"
-(goto) 2>nul & del "%~f0"
+# Запускаем только если файл реально появился
+if (Test-Path $old) {{
+    Start-Sleep -Seconds 1
+    Start-Process -FilePath $old
+}} else {{
+    [System.Windows.Forms.MessageBox]::Show(
+        'Не удалось применить обновление. Запустите программу вручную.',
+        'ПНОС Обновление'
+    )
+}}
+
+Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
 """
 
-    with open(bat_path, "w", encoding="cp1251") as f:
-        f.write(bat_content)
+    # Пишем в %TEMP% (ASCII-путь) в UTF-8 с BOM — PowerShell 5.1 читает его корректно
+    ps1_path = os.path.join(tempfile.gettempdir(), "_pnos_updater.ps1")
+    with open(ps1_path, "w", encoding="utf-8-sig") as f:
+        f.write(ps1_content)
 
-    # Запускаем батник и немедленно выходим
-    os.startfile(bat_path)
+    subprocess.Popen(
+        [
+            "powershell.exe",
+            "-ExecutionPolicy", "Bypass",
+            "-WindowStyle", "Hidden",
+            "-NonInteractive",
+            "-File", ps1_path,
+        ],
+        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+        close_fds=True,
+    )
     sys.exit(0)
