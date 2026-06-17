@@ -354,9 +354,17 @@ class Stage4Worker(QThread):
                         si = float(si_text.replace(',', '.'))
                         t_val = float(t_text.replace(',', '.'))
 
+                        # --- Определяем значение S для расчёта ---
+                        # Если исполнительная (после коррекции) совпадает с фактической,
+                        # добавляем 0.5 только для расчёта (в таблице не меняем)
+                        if abs(current_s - sf) < 0.01:
+                            calc_s = current_s + 0.5
+                        else:
+                            calc_s = current_s
+
                         # --- Расчёт скорости коррозии ---
                         if t_val > 0:
-                            speed = (current_s - sf) / t_val
+                            speed = (calc_s - sf) / t_val
                         else:
                             speed = 0.0
 
