@@ -9,6 +9,10 @@ venv/
 .env
 .venv
 
+# PyInstaller output
+build/
+dist/
+
 # Временные файлы проекта и логи
 logs/
 *.log

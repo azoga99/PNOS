@@ -23,7 +23,7 @@ GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 # Точное имя ZIP-архива, который нужно прикрепить к GitHub Release.
 # GitHub автоматически добавляет «Source code.zip» — мы его игнорируем,
 # поэтому имя должно совпадать с тем, что загружает разработчик вручную.
-ZIP_ASSET_NAME = "ПНОС.zip"
+ZIP_ASSET_NAME = "PNOS.zip"
 
 
 def _parse_version(tag: str) -> tuple:
