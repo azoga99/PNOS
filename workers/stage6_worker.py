@@ -31,7 +31,7 @@ from config import CONFIG
 from status_manager import get_stage_status, set_stage_status
 from yandex_api import YandexDiskAPI
 from workers.stage3_worker import normalize_gi_number, find_file
-from workers.stage4_worker import WordDialogKiller
+from workers.stage4_worker import WordDialogKiller, find_report_file
 
 # Word COM константы
 WD_ACTIVE_END_PAGE_NUMBER = 3  # wdActiveEndPageNumber
@@ -372,14 +372,10 @@ class Stage6Worker(QThread):
                 self.info.emit(f"Обработка {p_name}...", "wait")
                 self.log.emit(f"\n── {p_name} ──")
 
-                # Поиск файла отчёта
-                report_file = None
-                for f in os.listdir(p_folder):
-                    if f.startswith("Отчет_") and f.endswith(".docx"):
-                        report_file = os.path.join(p_folder, f)
-                        break
+                # Поиск файла отчёта (новое имя 'ЗЭПБ…' или старое 'Отчет_*')
+                report_file = find_report_file(p_folder)
                 if not report_file:
-                    self.log.emit("   ❌ Файл 'Отчет_*.docx' не найден. Сначала выполните Этап 6.")
+                    self.log.emit("   ❌ Файл отчёта не найден. Сначала выполните Этап 6.")
                     row["Результат"] = "❌ Нет отчета"
                     report_data.append(row)
                     self.progress.emit(20 + int((i + 1) / len(point_folders) * 80))

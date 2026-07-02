@@ -7,6 +7,7 @@ import re
 from PIL import Image
 from PySide6.QtCore import QThread, Signal
 from status_manager import get_stage_status, set_stage_status
+from workers.stage4_worker import find_report_file
 
 def is_cell_red(cell):
     """Проверяет наличие красной заливки в ячейке Word через XML."""
@@ -164,15 +165,11 @@ class Stage5Worker(QThread):
                 self.log.emit(f"   📊 Найдено: Красных={len(red_list)}, Синих={len(blue_list)}")
                 point_res["Фото"] = f"К:{len(red_list)}, С:{len(blue_list)}"
 
-                # 3. Поиск файла отчета
-                report_file = None
-                for f in os.listdir(p_folder):
-                    if f.startswith("Отчет_") and f.endswith(".docx"):
-                        report_file = os.path.join(p_folder, f)
-                        break
-                
+                # 3. Поиск файла отчета (новое имя 'ЗЭПБ…' или старое 'Отчет_*')
+                report_file = find_report_file(p_folder)
+
                 if not report_file:
-                    self.log.emit("   ❌ Файл 'Отчёт_*.docx' не найден. Сначала выполните Этап 5.")
+                    self.log.emit("   ❌ Файл отчёта не найден. Сначала выполните Этап 5.")
                     point_res["Результат"] = "❌ Нет отчета"
                     report_data.append(point_res)
                     continue

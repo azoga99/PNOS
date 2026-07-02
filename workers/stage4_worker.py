@@ -125,6 +125,56 @@ def find_file(folder: str, exts: tuple) -> str | None:
     return None
 
 
+def _clean_report_num(v) -> str:
+    """Приводит значение ячейки к целому числу-строке ('2744.0' -> '2744').
+    Нечисловое возвращает как есть (обрезав пробелы); пустое -> ''."""
+    if v is None:
+        return ""
+    s = str(v).strip()
+    if not s:
+        return ""
+    try:
+        return str(int(float(s.replace(",", "."))))
+    except (ValueError, TypeError):
+        return s
+
+
+def build_report_name(f9, b17, pt_num_str: str) -> str:
+    """Строит имя итогового отчёта.
+    'ЗЭПБ № ТТП-<F9>.<YY> - ттп № <B17>.docx', напр. 'ЗЭПБ № ТТП-2744.26 - ттп № 205.docx'.
+    Если F9 или B17 пусты/нечитаемы — возвращает прежнее имя 'Отчет_<номер>.docx',
+    чтобы пайплайн не падал.
+    """
+    cfg = CONFIG.get("REPORT_NAME", {})
+    yy = cfg.get("YEAR_SUFFIX", "26")
+    f9c = _clean_report_num(f9)
+    b17c = _clean_report_num(b17)
+    if f9c and b17c:
+        name = f"ЗЭПБ № ТТП-{f9c}.{yy} - ттп № {b17c}.docx"
+        # Страховка от недопустимых для Windows символов в имени файла
+        for ch in '\\/:*?"<>|':
+            name = name.replace(ch, "")
+        return name
+    return f"Отчет_{pt_num_str}.docx"
+
+
+def find_report_file(p_folder: str) -> str | None:
+    """Находит готовый отчёт в папке пункта.
+    Матчит и новое имя ('ЗЭПБ … .docx'), и старое ('Отчет_*.docx') — чтобы работали
+    повторные прогоны и уже переименованные вручную файлы. Предпочитает 'ЗЭПБ'.
+    """
+    zepb = None
+    otchet = None
+    for f in os.listdir(p_folder):
+        if f.startswith("~$") or not f.lower().endswith(".docx"):
+            continue
+        if f.startswith("ЗЭПБ"):
+            zepb = os.path.join(p_folder, f)
+        elif f.startswith("Отчет_"):
+            otchet = os.path.join(p_folder, f)
+    return zepb or otchet
+
+
 class Stage4Worker(QThread):
     log = Signal(str)             # Сообщение в лог
     progress = Signal(int)        # Прогресс 0-100
@@ -604,7 +654,17 @@ class Stage4Worker(QThread):
                     self.action_update.emit(f"[{pt_num_str}] Запуск макроса...")
                     self.log.emit(f"   [Excel] Открытие книги...")
                     work_wb = xl_app.Workbooks.Open(excel_path, UpdateLinks=0)
-                    
+
+                    # Читаем F9/B17 с листа "паспорт" для имени итогового отчёта
+                    report_f9 = report_b17 = None
+                    try:
+                        rn = CONFIG.get("REPORT_NAME", {})
+                        ps = work_wb.Sheets(rn.get("SHEET", "паспорт"))
+                        report_f9 = ps.Range(rn.get("TTP_CELL", "F9")).Value
+                        report_b17 = ps.Range(rn.get("POINT_CELL", "B17")).Value
+                    except Exception as e:
+                        self.log.emit(f"   ⚠ Не удалось прочитать F9/B17 для имени отчёта: {e}")
+
                     try:
                         self.log.emit(f"   [Excel] Выполнение TransTab...")
                         xl_app.Run(f"'{work_wb.Name}'!modTransTab.TransTab")
@@ -672,10 +732,19 @@ class Stage4Worker(QThread):
                         doc.Fields.Unlink()
                         doc.MailMerge.MainDocumentType = -1
                         
-                        out_name = f"Отчет_{pt_num_str}.docx"
+                        out_name = build_report_name(report_f9, report_b17, pt_num_str)
                         out_path = os.path.join(p_folder, out_name)
                         doc.SaveAs2(out_path, 16)
-                        
+
+                        # Убираем устаревший файл со старым именем, если остался от прошлого прогона
+                        if out_name.startswith("ЗЭПБ"):
+                            old_default = os.path.join(p_folder, f"Отчет_{pt_num_str}.docx")
+                            if os.path.exists(old_default) and os.path.abspath(old_default) != os.path.abspath(out_path):
+                                try:
+                                    os.remove(old_default)
+                                except Exception:
+                                    pass
+
                         self.log.emit(f"   ✓ [Word] Отчет готов: {out_name}")
                         point_report["Слияние Word"] = True
 
