@@ -68,6 +68,21 @@ def safe_close_com(obj, save=False):
         pass
 
 
+def normalize_gi_number(val) -> str:
+    """Нормализует номер папки актов ГИ из ячейки B12.
+    Убирает лишние пробелы и приводит любые тире/минусы к обычному дефису.
+    Пример: ' 39–40 ' -> '39-40'.
+    """
+    if val is None:
+        return ""
+    s = str(val).strip()
+    for ch in ("‐", "‑", "‒", "–", "—", "―", "−"):
+        s = s.replace(ch, "-")
+    # Убираем все пробельные символы (номера участков вида "39-40" их не содержат)
+    s = re.sub(r"\s+", "", s)
+    return s
+
+
 class DialogKiller:
     """Фоновый поток для автоматического закрытия всплывающих ошибок Excel."""
     def __init__(self, log_callback):
@@ -456,6 +471,18 @@ class Stage3Worker(QThread):
                         xl_app.Calculation = -4135  # Возвращаем Manual
                     except Exception:
                         pass
+
+                    # --- Чтение номера папки актов ГИ из B12 (для этапа 7) ---
+                    try:
+                        gi_cell = CONFIG.get("GI_CONFIG", {}).get("PASSPORT_CELL", "B12")
+                        gi_num = normalize_gi_number(ws.Range(gi_cell).Value)
+                        if gi_num:
+                            set_stage_status(p_folder, "gi_number", gi_num)
+                            self.log.emit(f"   [ГИ] Номер участка ({gi_cell}): {gi_num}")
+                        else:
+                            self.log.emit(f"   [ГИ] ⚠ Ячейка {gi_cell} пуста — номер актов ГИ не определён.")
+                    except Exception as e:
+                        self.log.emit(f"   [ГИ] ⚠ Не удалось прочитать {gi_cell}: {e}")
 
                     # Сохранение
                     work_wb.Save()

@@ -23,12 +23,9 @@ from config import CONFIG
 from utils import resource_path
 from version import APP_VERSION
 from pages.settings_page import SettingsPage
-from workers.stage1_worker import Stage1Worker
-from workers.stage2_worker import Stage2Worker
-from workers.stage3_worker import Stage3Worker
-from workers.stage4_worker import Stage4Worker
-from workers.stage5_worker import Stage5Worker
-from report_dialog import ReportDialog
+# Воркеры этапов и ReportDialog импортируются лениво (внутри методов запуска),
+# чтобы не тянуть pandas / aiohttp / win32com / python-docx при старте приложения.
+# Это заметно ускоряет открытие программы.
 
 import subprocess
 
@@ -97,6 +94,7 @@ class MainWindow(QMainWindow):
             (4, "Запуск макросов"),
             (5, "Создание отчёта"),
             (6, "Вставка картинок"),
+            (7, "Вставка актов ГИ"),
         ]
 
         # Контейнер для кнопок, чтобы они прижимались наверх
@@ -126,7 +124,7 @@ class MainWindow(QMainWindow):
         self.btn_settings.setObjectName("nav_button")
         self.btn_settings.setCheckable(True)
         self.btn_settings.setCursor(Qt.PointingHandCursor)
-        self.btn_settings.clicked.connect(lambda: self._switch_page(7))
+        self.btn_settings.clicked.connect(lambda: self._switch_page(8))
         sidebar_layout.addWidget(self.btn_settings)
         sidebar_layout.addSpacing(10)
 
@@ -186,10 +184,11 @@ class MainWindow(QMainWindow):
             3: {"title": "Шаг 3: Ручной контроль", "desc": "Проверьте файлы перед запуском макросов. Этот этап выполняется вручную.", "warn": ""},
             4: {"title": "Шаг 4: Запуск макросов", "desc": "Перенос переменных из Паспорта (Word) в Excel и автоматический запуск макросов Restore и Save.", "warn": "⚠️ Во время работы этого этапа не открывайте другие файлы Excel и не перехватывайте фокус мыши!"},
             5: {"title": "Шаг 5: Создание отчёта", "desc": "Генерация финального отчета Word.", "warn": ""},
-            6: {"title": "Шаг 6: Вставка картинок", "desc": "Пост-обработка: вставка скачанных фотографий в отчёт (в разработке).", "warn": ""}
+            6: {"title": "Шаг 6: Вставка картинок", "desc": "Пост-обработка: вставка скачанных фотографий в отчёт (в разработке).", "warn": ""},
+            7: {"title": "Шаг 7: Вставка актов ГИ", "desc": "Скачивание актов гидроиспытаний по номеру участка (паспорт B12) и вставка их в отчёт по метке [ГИ]. Затем пересчёт номеров страниц в СОДЕРЖАНИИ.", "warn": ""}
         }
-        
-        for stage_num in range(2, 7):
+
+        for stage_num in range(2, 8):
             page = QWidget()
             layout = QVBoxLayout(page)
             layout.setContentsMargins(0, 0, 0, 0)
@@ -260,7 +259,8 @@ class MainWindow(QMainWindow):
             if stage_num == 4: btn_run.clicked.connect(self._start_stage3)
             if stage_num == 5: btn_run.clicked.connect(self._start_stage4)
             if stage_num == 6: btn_run.clicked.connect(self._start_stage5)
-            
+            if stage_num == 7: btn_run.clicked.connect(self._start_stage6)
+
             btn_layout.addStretch()
             btn_layout.addWidget(btn_run)
             btn_layout.addWidget(btn_stop)
@@ -343,7 +343,7 @@ class MainWindow(QMainWindow):
         self.pages_stack.setCurrentIndex(index)
         for i, btn in enumerate(self.nav_buttons):
             btn.setChecked(i == index)
-        self.btn_settings.setChecked(index == 7)
+        self.btn_settings.setChecked(index == 8)
 
     def _setup_page1(self):
         """Создает UI для первого этапа (Настройки и парсинг)."""
@@ -484,6 +484,7 @@ class MainWindow(QMainWindow):
 
     def _show_final_report_dialog(self):
         root = self._get_local_root()
+        from report_dialog import ReportDialog
         dlg = ReportDialog(root, self)
         dlg.exec()
 
@@ -581,6 +582,7 @@ class MainWindow(QMainWindow):
         need_epb = self.page_settings.chk_epb.isChecked()
         max_threads = 10 if self.page_settings.btn_speed_fast.isChecked() else 3
 
+        from workers.stage1_worker import Stage1Worker
         worker = Stage1Worker(
             excel_path=None, 
             local_root=local_root, 
@@ -672,6 +674,7 @@ class MainWindow(QMainWindow):
             preview_table.clear()
             preview_table.hide()
             
+        from workers.stage2_worker import Stage2Worker
         worker = Stage2Worker(local_root, parent=self)
         worker.log.connect(self._append_log)
         worker.info.connect(lambda msg, cat: self._add_activity(1, msg, cat))
@@ -758,6 +761,7 @@ class MainWindow(QMainWindow):
             preview_table.hide()
             
         macro_path = self.page_settings.edit_macro_path.text().strip() or None
+        from workers.stage3_worker import Stage3Worker
         worker = Stage3Worker(local_root, macro_master_path=macro_path, parent=self)
         worker.log.connect(self._append_log)
         worker.info.connect(lambda msg, cat: self._add_activity(3, msg, cat))
@@ -779,6 +783,7 @@ class MainWindow(QMainWindow):
         prog.setValue(0)
         report_table.hide()
         
+        from workers.stage4_worker import Stage4Worker
         worker = Stage4Worker(local_root, parent=self)
         worker.log.connect(self._append_log)
         worker.info.connect(lambda msg, cat: self._add_activity(4, msg, cat))
@@ -798,6 +803,7 @@ class MainWindow(QMainWindow):
         prog.setValue(0)
         report_table.hide()
         
+        from workers.stage5_worker import Stage5Worker
         worker = Stage5Worker(local_root, parent=self)
         worker.log.connect(self._append_log)
         worker.info.connect(lambda msg, cat: self._add_activity(5, msg, cat))
@@ -806,6 +812,26 @@ class MainWindow(QMainWindow):
         worker.finished_ok.connect(lambda ok: self._on_stub_finished(5, ok))
         worker.start()
         self._workers["stage5"] = worker
+
+    def _start_stage6(self):
+        local_root = self._get_local_root()
+        p = self.stub_pages[5] # Шаг 7: Вставка актов ГИ
+        btn, prog, act_list, stop, report_table = p["btn_run"], p["progress"], p["activity_list"], p["btn_stop"], p["report_table"]
+        btn.setText("Выполняется...")
+        btn.setEnabled(False)
+        stop.setEnabled(True)
+        prog.setValue(0)
+        report_table.hide()
+
+        from workers.stage6_worker import Stage6Worker
+        worker = Stage6Worker(local_root, parent=self)
+        worker.log.connect(self._append_log)
+        worker.info.connect(lambda msg, cat: self._add_activity(6, msg, cat))
+        worker.progress.connect(prog.setValue)
+        worker.report_ready.connect(lambda d: self._show_integrated_report(7, ["№ Пункта", "Акты ГИ", "Результат"], d))
+        worker.finished_ok.connect(lambda ok: self._on_stub_finished(6, ok))
+        worker.start()
+        self._workers["stage6"] = worker
 
     def _on_stub_finished(self, step_idx: int, success: bool):
         p = self.stub_pages[step_idx - 1]
@@ -830,14 +856,14 @@ class MainWindow(QMainWindow):
             else:
                 # Все этапы завершены -> Перейти к глобальному отчету
                 self._calculate_global_summary()
-                self._switch_page(6)
+                self._switch_page(7)
         self._update_global_progress()
 
     def _update_global_progress(self):
         """Обновляет прогресс-бар на основе реально выполненных этапов."""
         completed_count = len(self._completed_stages)
-        # Всего 6 этапов (0-5)
-        self.global_progress.setValue(int(completed_count * (100.0 / 6.0)))
+        # Всего 7 этапов (0-6)
+        self.global_progress.setValue(int(completed_count * (100.0 / 7.0)))
 
     def _force_stop_active_stage(self):
         """Принудительная остановка текущего процесса и очистка COM."""
@@ -919,7 +945,7 @@ class MainWindow(QMainWindow):
         error_count += st1.get("not_created", 0)
         
         # Считаем по остальным (там списки словарей)
-        for stage_idx in [2, 4, 5, 6]:
+        for stage_idx in [2, 4, 5, 6, 7]:
             results_val = self._stage_results.get(stage_idx)
             if not results_val or not isinstance(results_val, list):
                 continue

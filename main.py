@@ -38,7 +38,31 @@ def main():
     window = MainWindow()
     window.show()
 
+    # Фоновый прогрев тяжёлых модулей (pandas, aiohttp, win32com, python-docx).
+    # Они импортируются лениво, поэтому старт быстрый; прогрев в фоне делает
+    # первый клик по этапу мгновенным, не задерживая появление окна.
+    _prewarm_heavy_imports()
+
     sys.exit(app.exec())
+
+
+def _prewarm_heavy_imports():
+    """Импортирует модули воркеров в фоновом потоке после показа окна."""
+    import threading
+
+    def _worker():
+        import importlib
+        for mod in (
+            "workers.stage1_worker", "workers.stage2_worker", "workers.stage3_worker",
+            "workers.stage4_worker", "workers.stage5_worker", "workers.stage6_worker",
+            "report_dialog",
+        ):
+            try:
+                importlib.import_module(mod)
+            except Exception:
+                pass
+
+    threading.Thread(target=_worker, daemon=True).start()
 
 
 if __name__ == "__main__":

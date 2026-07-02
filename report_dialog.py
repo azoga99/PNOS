@@ -106,10 +106,11 @@ class ReportDialog(QDialog):
         
         # Таблица
         self.table = QTableWidget()
-        self.table.setColumnCount(6)
+        self.table.setColumnCount(7)
         self.table.setHorizontalHeaderLabels([
-            "№ Пункта", "Этап 1 (Загрузка)", "Этап 2 (Извлечение)", 
-            "Этап 3 (Макросы)", "Этап 4 (Слияние)", "Этап 5 (Фотография)"
+            "№ Пункта", "Этап 1 (Загрузка)", "Этап 2 (Извлечение)",
+            "Этап 3 (Макросы)", "Этап 4 (Слияние)", "Этап 5 (Фотография)",
+            "Этап 6 (Акты ГИ)"
         ])
         
         # Настройки взаимодействия
@@ -120,7 +121,7 @@ class ReportDialog(QDialog):
         
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        for i in range(1, 6):
+        for i in range(1, 7):
             header.setSectionResizeMode(i, QHeaderView.Stretch)
             
         layout.addWidget(self.table)
@@ -188,7 +189,7 @@ class ReportDialog(QDialog):
             status_path = get_status_file_path(folder_path)
             
             # Чтение статуса
-            st1, st2, st3, st4, st5 = False, False, False, False, False
+            st1, st2, st3, st4, st5, st6 = False, False, False, False, False, False
             if os.path.exists(status_path):
                 try:
                     with open(status_path, "r", encoding="utf-8") as f:
@@ -198,13 +199,14 @@ class ReportDialog(QDialog):
                         st3 = data.get("stage3", False)
                         st4 = data.get("stage4", False)
                         st5 = data.get("stage5", False)
-                        
+                        st6 = data.get("stage6", False)
+
                         warning = data.get("stage5_warning", "")
                         if warning:
                             self.warnings_list.append(warning)
                 except: pass
 
-            if st1 and st2 and st3 and st4 and st5:
+            if st1 and st2 and st3 and st4 and st5 and st6:
                 completed_all += 1
                 
             # Заполняем строку
@@ -215,7 +217,7 @@ class ReportDialog(QDialog):
             self.table.setItem(row_idx, 0, it_num)
             
             # Столбцы статусов
-            statuses = [st1, st2, st3, st4, st5]
+            statuses = [st1, st2, st3, st4, st5, st6]
             for col_idx, s_val in enumerate(statuses, start=1):
                 text, color = self.get_symbol_and_color(s_val)
                 it = QTableWidgetItem(text)

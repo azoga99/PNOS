@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from version import APP_VERSION
-from updater import UpdateWorker, apply_update_and_restart
+# updater импортируется лениво (внутри методов), чтобы не тянуть requests при старте.
 
 
 class SettingsPage(QWidget):
@@ -222,6 +222,7 @@ class SettingsPage(QWidget):
         self.lbl_update_status.setText("Подключение к GitHub...")
         self.lbl_update_status.setStyleSheet("color: #2563eb; font-size: 12px; margin-top: 5px;")
 
+        from updater import UpdateWorker
         self._update_worker = UpdateWorker()
         self._update_worker.status.connect(self._on_update_status)
         self._update_worker.download_progress.connect(self.update_progress.setValue)
@@ -255,4 +256,5 @@ class SettingsPage(QWidget):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
         )
         if reply == QMessageBox.Yes:
+            from updater import apply_update_and_restart
             apply_update_and_restart(self._new_exe_path)
