@@ -192,6 +192,89 @@ class UpdateWorker(QThread):
             self.finished_ok.emit(False, f"❌ Неизвестная ошибка: {e}")
 
 
+def build_updater_ps1(current_exe: str, new_exe_path: str, log_path: str) -> str:
+    """Собирает текст PowerShell-скрипта подмены EXE и перезапуска.
+    Вынесено отдельно, чтобы логику можно было протестировать без заморозки.
+
+    Отличия от прежней версии (устраняют молчаливый сбой обновления):
+      - ждём РЕАЛЬНОГО выхода процесса (опрос по имени), а не фиксированный Sleep;
+      - долгий повтор удаления (до 30с) — переживает блокировку файла антивирусом;
+      - при неудаче показываем понятное окно с инструкцией (Add-Type загружен!),
+        а не падаем молча; и всё равно запускаем то, что есть, — пользователь
+        не остаётся без программы;
+      - ведём лог в %TEMP%\\pnos_update.log для диагностики.
+    """
+    current_name = os.path.basename(current_exe)
+    base_name = os.path.splitext(current_name)[0]
+
+    def _ps(s: str) -> str:
+        """Экранирует строку для одинарных кавычек PowerShell ('...')."""
+        return s.replace("'", "''")
+
+    # {{ и }} в f-строке Python → { и } в реальном тексте PS1
+    return f"""\
+# ПНОС auto-updater — сгенерировано приложением, удалится после запуска
+Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue | Out-Null
+$old  = '{_ps(current_exe)}'
+$new  = '{_ps(new_exe_path)}'
+$name = '{_ps(current_name)}'
+$base = '{_ps(base_name)}'
+$log  = '{_ps(log_path)}'
+
+function L($m) {{ Add-Content -Path $log -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff') + '  ' + $m) -Encoding UTF8 -ErrorAction SilentlyContinue }}
+L "=== apply update: old=$old new=$new ==="
+
+# 1. Завершаем процессы программы и ЖДЁМ полного выхода (тогда файл разблокируется)
+taskkill /f /im $name 2>$null | Out-Null
+$waited = 0
+while ((Get-Process -Name $base -ErrorAction SilentlyContinue) -and ($waited -lt 40)) {{
+    Start-Sleep -Milliseconds 500
+    $waited++
+}}
+L "process exited after $([math]::Round($waited * 0.5, 1)) s"
+
+# 2. Удаляем старый EXE — долгий повтор на случай блокировки антивирусом/ОС
+$deleted = $false
+for ($i = 0; $i -lt 30; $i++) {{
+    Remove-Item -Path $old -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path $old)) {{ $deleted = $true; break }}
+    Start-Sleep -Seconds 1
+}}
+L "old deleted=$deleted"
+
+# 3. Перемещаем новый EXE на место старого
+if ($deleted) {{
+    for ($i = 0; $i -lt 10; $i++) {{
+        Move-Item -Path $new -Destination $old -Force -ErrorAction SilentlyContinue
+        if (Test-Path $old) {{ break }}
+        Start-Sleep -Seconds 1
+    }}
+}}
+
+$installed = (Test-Path $old) -and (-not (Test-Path $new))
+L "installed=$installed"
+
+# 4. Запускаем новую версию, либо честно сообщаем об ошибке с инструкцией
+if ($installed) {{
+    Start-Sleep -Milliseconds 500
+    Start-Process -FilePath $old
+    L "relaunched new version"
+}} else {{
+    L "FAILED to install (old deleted=$deleted)"
+    $msg = 'Не удалось применить обновление автоматически.' + [Environment]::NewLine + [Environment]::NewLine +
+           'Новая версия уже скачана. Закройте программу, удалите старый файл ' +
+           'и переименуйте "' + [IO.Path]::GetFileName($new) + '" в "' + $name + '".' + [Environment]::NewLine + [Environment]::NewLine +
+           ('Лог: ' + $log)
+    try {{ [System.Windows.Forms.MessageBox]::Show($msg, 'ПНОС — обновление', 'OK', 'Warning') | Out-Null }} catch {{ }}
+    # Чтобы пользователь не остался без программы — запускаем то, что доступно
+    if (Test-Path $old) {{ Start-Process -FilePath $old }}
+    elseif (Test-Path $new) {{ Start-Process -FilePath $new }}
+}}
+
+Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
+"""
+
+
 def apply_update_and_restart(new_exe_path: str):
     """
     Запускает PowerShell-скрипт, который:
@@ -218,53 +301,12 @@ def apply_update_and_restart(new_exe_path: str):
         return
 
     current_exe = sys.executable
-    current_name = os.path.basename(current_exe)
+    log_path = os.path.join(tempfile.gettempdir(), "pnos_update.log")
+    ps1_content = build_updater_ps1(current_exe, new_exe_path, log_path)
 
-    def _ps(s: str) -> str:
-        """Экранирует строку для одинарных кавычек PowerShell ('...')."""
-        return s.replace("'", "''")
-
-    # {{ и }} в f-строке Python → { и } в реальном тексте PS1
-    ps1_content = f"""\
-# ПНОС auto-updater — сгенерировано приложением, удалится после запуска
-$old  = '{_ps(current_exe)}'
-$new  = '{_ps(new_exe_path)}'
-$name = '{_ps(current_name)}'
-
-taskkill /f /im $name 2>$null | Out-Null
-Start-Sleep -Seconds 3
-
-# Удаляем старый EXE (повтор при блокировке антивирусом или ОС)
-$tries = 10
-while ((Test-Path $old) -and ($tries -gt 0)) {{
-    Remove-Item -Path $old -Force -ErrorAction SilentlyContinue
-    if (Test-Path $old) {{ Start-Sleep -Seconds 1 }}
-    $tries--
-}}
-
-# Перемещаем новый EXE на место старого
-$moves = 5
-while ((-not (Test-Path $old)) -and ($moves -gt 0)) {{
-    Move-Item -Path $new -Destination $old -Force -ErrorAction SilentlyContinue
-    if (-not (Test-Path $old)) {{ Start-Sleep -Seconds 1 }}
-    $moves--
-}}
-
-# Запускаем только если файл реально появился
-if (Test-Path $old) {{
-    Start-Sleep -Seconds 1
-    Start-Process -FilePath $old
-}} else {{
-    [System.Windows.Forms.MessageBox]::Show(
-        'Не удалось применить обновление. Запустите программу вручную.',
-        'ПНОС Обновление'
-    )
-}}
-
-Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
-"""
-
-    # Пишем в %TEMP% (ASCII-путь) в UTF-8 с BOM — PowerShell 5.1 читает его корректно
+    # Пишем в %TEMP% (ASCII-путь) в UTF-8 с BOM — PowerShell 5.1 читает его корректно.
+    # BOM обязателен: без него PS 5.1 читает файл как cp1251 и кириллическое имя
+    # «ПНОС.exe» превращается в мусор → подмена срывается.
     ps1_path = os.path.join(tempfile.gettempdir(), "_pnos_updater.ps1")
     with open(ps1_path, "w", encoding="utf-8-sig") as f:
         f.write(ps1_content)
