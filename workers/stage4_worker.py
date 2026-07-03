@@ -162,17 +162,28 @@ def find_report_file(p_folder: str) -> str | None:
     """Находит готовый отчёт в папке пункта.
     Матчит и новое имя ('ЗЭПБ … .docx'), и старое ('Отчет_*.docx') — чтобы работали
     повторные прогоны и уже переименованные вручную файлы. Предпочитает 'ЗЭПБ'.
+
+    Если 'ЗЭПБ'-файлов несколько (например, рядом с основным лежит копия
+    '... ПЕЧАТЬ.docx' для печати) — берётся файл БЕЗ 'ПЕЧАТЬ' в имени, и выбор
+    детерминирован (сортировка), а не зависит от порядка os.listdir.
     """
-    zepb = None
-    otchet = None
-    for f in os.listdir(p_folder):
+    zepb_candidates = []
+    otchet_candidates = []
+    for f in sorted(os.listdir(p_folder)):
         if f.startswith("~$") or not f.lower().endswith(".docx"):
             continue
         if f.startswith("ЗЭПБ"):
-            zepb = os.path.join(p_folder, f)
+            zepb_candidates.append(f)
         elif f.startswith("Отчет_"):
-            otchet = os.path.join(p_folder, f)
-    return zepb or otchet
+            otchet_candidates.append(f)
+
+    if zepb_candidates:
+        non_print = [f for f in zepb_candidates if "печать" not in f.lower()]
+        chosen = sorted(non_print)[0] if non_print else sorted(zepb_candidates)[0]
+        return os.path.join(p_folder, chosen)
+    if otchet_candidates:
+        return os.path.join(p_folder, sorted(otchet_candidates)[0])
+    return None
 
 
 class Stage4Worker(QThread):

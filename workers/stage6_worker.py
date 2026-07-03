@@ -8,7 +8,9 @@
   2. Скачивает JPG-акты из /ПНОС/<число>/ на Я.Диске (аккаунт шаблонов TOKEN_BASE),
      один раз на каждое уникальное число, в кэш <local_root>/_gi_cache/<число>/.
   3. Вставляет акты по порядку (по хвостовому числу в имени файла), по одному
-     на страницу, начиная с метки [ГИ]. Поворот не нужен — файлы уже вертикальные.
+     на страницу, начиная с метки [ГИ]. Ориентация приводится по EXIF-тегу
+     (сканы часто хранятся с "лежащими" пикселями + тегом поворота — если
+     не применить его явно, Word вставит картинку как есть, боком).
   4. Полностью пересчитывает номера страниц на листе СОДЕРЖАНИЕ по фактическим
      страницам финального документа (это заодно чинит сдвиг от фото этапа 6).
 
@@ -19,12 +21,13 @@
 import os
 import re
 import asyncio
+import tempfile
 
 import pythoncom
 import win32com.client
 import win32process
 import aiohttp
-from PIL import Image
+from PIL import Image, ImageOps
 from PySide6.QtCore import QThread, Signal
 
 from config import CONFIG
@@ -36,7 +39,11 @@ from workers.stage4_worker import WordDialogKiller, find_report_file
 # Word COM константы
 WD_ACTIVE_END_PAGE_NUMBER = 3  # wdActiveEndPageNumber
 WD_WRAP_FRONT = 3              # wdWrapFront
-WD_SHAPE_CENTER = -999995     # значение Left/Top для центрирования
+WD_SHAPE_CENTER = -999995     # значение Left/Top = центрирование (wdShapeCenter)
+# Габариты вписывания акта (пункты) — как у схем [ФОТО] на A4-странице. Даёт размер
+# ~520×735, совпадающий с эталоном оформления; при wdShapeCenter акт центрируется
+# в области печати страницы.
+GI_MAX_W, GI_MAX_H = 520.0, 750.0
 
 
 def gi_sort_key(path: str) -> int:
@@ -178,23 +185,23 @@ class Stage6Worker(QThread):
             return 0
 
         # 1. Диапазон страницы, где стоит метка — эталон для дублирования
-        marker_range = find_range.Duplicate
-        marker_range.Select()
-        page_range = self.wd_app.Selection.Bookmarks("\\page").Range
-        page_range.Copy()
+        try:
+            marker_range = find_range.Duplicate
+            marker_range.Select()
+            page_range = self.wd_app.Selection.Bookmarks("\\page").Range
+            page_range.Copy()
 
-        # 2. Дублируем страницу под каждый дополнительный акт
-        insert_pos = page_range.End
-        for _ in range(len(images) - 1):
-            r_paste = doc.Range(insert_pos, insert_pos)
-            r_paste.Paste()
-            insert_pos = r_paste.End
+            # 2. Дублируем страницу под каждый дополнительный акт
+            insert_pos = page_range.End
+            for _ in range(len(images) - 1):
+                r_paste = doc.Range(insert_pos, insert_pos)
+                r_paste.Paste()
+                insert_pos = r_paste.End
+        except Exception as e:
+            self.log.emit(f"   ❌ Не удалось размножить страницу под акты ГИ: {e}")
+            return 0
 
         # 3. Каждую копию метки заменяем на изображение (по порядку)
-        ps = doc.PageSetup
-        max_w = ps.PageWidth - ps.LeftMargin - ps.RightMargin
-        max_h = ps.PageHeight - ps.TopMargin - ps.BottomMargin
-
         inserted = 0
         for img_path in images:
             fresh = doc.Content
@@ -205,14 +212,27 @@ class Stage6Worker(QThread):
             anchor = fresh.Duplicate
             anchor.Text = " "
             anchor.Collapse(1)
+
+            temp_path = None
             try:
-                with Image.open(img_path) as im:
+                with Image.open(img_path) as im_raw:
+                    orig_format = im_raw.format or "JPEG"
+                    # Применяем EXIF Orientation физически: сканы часто содержат
+                    # "лежащие" пиксели + тег поворота, который Word игнорирует при
+                    # AddPicture (в отличие от проводника/просмотрщиков) — без этого
+                    # акт вставляется боком (альбомно) вместо вертикали.
+                    im = ImageOps.exif_transpose(im_raw)
                     ow, oh = im.size
-                ratio = min(max_w / ow, max_h / oh)
-                tw, th = ow * ratio, oh * ratio
-                shape = doc.Shapes.AddPicture(img_path, False, True, 0, 0, tw, th, anchor)
+                    ratio = min(GI_MAX_W / ow, GI_MAX_H / oh)
+                    tw, th = ow * ratio, oh * ratio
+                    temp_path = os.path.join(tempfile.gettempdir(), f"gi_{os.path.basename(img_path)}")
+                    im.save(temp_path, format=orig_format)
+
+                shape = doc.Shapes.AddPicture(temp_path, False, True, 0, 0, tw, th, anchor)
                 shape.WrapFormat.Type = WD_WRAP_FRONT
                 shape.LockAspectRatio = True
+                # Размер и центрирование — как у схем [ФОТО] (эталон оформления):
+                # акт вписывается в рамку A4-страницы и центрируется в области печати.
                 shape.RelativeHorizontalPosition = 0  # wdRelativeHorizontalPositionMargin
                 shape.Left = WD_SHAPE_CENTER
                 shape.RelativeVerticalPosition = 0
@@ -221,6 +241,12 @@ class Stage6Worker(QThread):
                 self.log.emit(f"   ✓ Вставлен акт: {os.path.basename(img_path)}")
             except Exception as e:
                 self.log.emit(f"   ❌ Ошибка вставки {os.path.basename(img_path)}: {e}")
+            finally:
+                if temp_path and os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except Exception:
+                        pass
 
         # Подчищаем остатки метки, если что-то осталось
         while True:
@@ -242,7 +268,15 @@ class Stage6Worker(QThread):
 
         toc_entries = []      # [(paragraph, key)]
         key_to_page = {}      # key -> реальная страница
-        in_toc_zone = True
+        # Зона содержания открывается СТРОГО по заголовку "СОДЕРЖАНИЕ", а не с начала
+        # документа: на титульном листе перед ним попадаются регистрационные номера
+        # и даты вида "59-ЗС-...-2026" / "21 апреля 2026 г.", которые ложно похожи на
+        # заголовок раздела (начинаются с цифр, дальше есть буквы) и без этого якоря
+        # преждевременно "закрывали" зону раньше, чем парсер доходил до реального
+        # блока СОДЕРЖАНИЕ — из-за чего пересчёт не находил ни одной строки и молча
+        # ничего не менял.
+        in_toc_zone = False
+        seen_anchor = False
 
         for para in doc.Paragraphs:
             try:
@@ -250,6 +284,11 @@ class Stage6Worker(QThread):
             except Exception:
                 continue
             txt = raw[:-1] if raw.endswith('\r') else raw
+            if not seen_anchor:
+                if txt.strip().upper() == "СОДЕРЖАНИЕ":
+                    seen_anchor = True
+                    in_toc_zone = True
+                continue
             key = _toc_key(txt)
             if key is None:
                 continue
@@ -264,6 +303,9 @@ class Stage6Worker(QThread):
                         key_to_page[key] = int(para.Range.Information(WD_ACTIVE_END_PAGE_NUMBER))
                     except Exception:
                         pass
+
+        if not seen_anchor:
+            self.log.emit("   ⚠ Заголовок «СОДЕРЖАНИЕ» не найден — пересчёт страниц пропущен.")
 
         updated = 0
         for para, key in toc_entries:
@@ -389,13 +431,26 @@ class Stage6Worker(QThread):
                     doc = self.wd_app.Documents.Open(report_file)
 
                     inserted = self._insert_gi(doc, images)
-                    if images and inserted > 0:
-                        row["Акты ГИ"] = str(inserted)
-                        self.log.emit(f"   ✅ Вставлено актов ГИ: {inserted}")
+                    if images:
+                        total = len(images)
+                        if inserted == total:
+                            row["Акты ГИ"] = str(inserted)
+                            self.log.emit(f"   ✅ Вставлено актов ГИ: {inserted}")
+                        elif inserted > 0:
+                            # Часть актов вставилась, часть — нет (см. лог выше по причине)
+                            row["Акты ГИ"] = f"{inserted}/{total}"
+                            self.info.emit(f"Вставлена только часть актов ГИ ({inserted}/{total}) для {gi_num}", "warn")
+                            self.log.emit(f"   ⚠ Вставлено только {inserted} из {total} актов ГИ.")
+                        else:
+                            # Акты найдены на диске, но вставить в документ не удалось —
+                            # это не то же самое, что "актов нет", поэтому сообщение отдельное
+                            row["Акты ГИ"] = f"ошибка вставки ({gi_num})"
+                            self.info.emit(f"Не удалось вставить акты ГИ для {gi_num}", "warn")
+                            self.log.emit(f"   ❌ Акты ГИ найдены ({total} шт.), но вставить в документ не удалось.")
                     elif gi_num:
-                        row["Акты ГИ"] = f"нет для {gi_num}"
+                        row["Акты ГИ"] = f"нет папки для {gi_num}"
                         self.info.emit(f"Нет актов ГИ для {gi_num}", "warn")
-                        self.log.emit(f"   ⚠ Нет актов ГИ для {gi_num}.")
+                        self.log.emit(f"   ⚠ На диске нет папки актов для «{gi_num}».")
                     else:
                         row["Акты ГИ"] = "участок не задан"
                         self.log.emit("   ⚠ Не определён номер участка (B12).")

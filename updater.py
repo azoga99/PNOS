@@ -193,19 +193,23 @@ class UpdateWorker(QThread):
 
 
 def build_updater_ps1(current_exe: str, new_exe_path: str, log_path: str) -> str:
-    """Собирает текст PowerShell-скрипта подмены EXE и перезапуска.
+    """Собирает текст PowerShell-скрипта бесшовной подмены EXE и перезапуска.
     Вынесено отдельно, чтобы логику можно было протестировать без заморозки.
 
-    Отличия от прежней версии (устраняют молчаливый сбой обновления):
-      - ждём РЕАЛЬНОГО выхода процесса (опрос по имени), а не фиксированный Sleep;
-      - долгий повтор удаления (до 30с) — переживает блокировку файла антивирусом;
-      - при неудаче показываем понятное окно с инструкцией (Add-Type загружен!),
-        а не падаем молча; и всё равно запускаем то, что есть, — пользователь
-        не остаётся без программы;
-      - ведём лог в %TEMP%\\pnos_update.log для диагностики.
+    Главное отличие от прежней схемы (устраняет «вторую иконку»):
+      - НЕ удаляем работающий EXE (это ненадёжно: onefile-загрузчик PyInstaller
+        ещё держит файл после выхода, и удаление срывается) — вместо этого
+        ПЕРЕИМЕНОВЫВАЕМ старый EXE в сторону (на NTFS это работает даже для
+        заблокированного файла), а на его место КЛАДЁМ новый. Swap без удаления
+        практически не может провалиться;
+      - в ЛЮБОМ исходе на диске остаётся ровно ОДИН файл ПНОС.exe: при успехе
+        скачанный PNOS_update.exe переезжает на место старого, при неудаче —
+        откатываемся и удаляем скачанный дубль. Второй иконки не остаётся;
+      - ждём реального выхода процесса, ведём лог в %TEMP%\\pnos_update.log.
     """
     current_name = os.path.basename(current_exe)
     base_name = os.path.splitext(current_name)[0]
+    bak_path = current_exe + ".old"  # старый EXE, сдвинутый в сторону
 
     def _ps(s: str) -> str:
         """Экранирует строку для одинарных кавычек PowerShell ('...')."""
@@ -217,6 +221,7 @@ def build_updater_ps1(current_exe: str, new_exe_path: str, log_path: str) -> str
 Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue | Out-Null
 $old  = '{_ps(current_exe)}'
 $new  = '{_ps(new_exe_path)}'
+$bak  = '{_ps(bak_path)}'
 $name = '{_ps(current_name)}'
 $base = '{_ps(base_name)}'
 $log  = '{_ps(log_path)}'
@@ -224,7 +229,7 @@ $log  = '{_ps(log_path)}'
 function L($m) {{ Add-Content -Path $log -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff') + '  ' + $m) -Encoding UTF8 -ErrorAction SilentlyContinue }}
 L "=== apply update: old=$old new=$new ==="
 
-# 1. Завершаем процессы программы и ЖДЁМ полного выхода (тогда файл разблокируется)
+# 1. Завершаем процессы программы и ЖДЁМ полного выхода
 taskkill /f /im $name 2>$null | Out-Null
 $waited = 0
 while ((Get-Process -Name $base -ErrorAction SilentlyContinue) -and ($waited -lt 40)) {{
@@ -233,42 +238,51 @@ while ((Get-Process -Name $base -ErrorAction SilentlyContinue) -and ($waited -lt
 }}
 L "process exited after $([math]::Round($waited * 0.5, 1)) s"
 
-# 2. Удаляем старый EXE — долгий повтор на случай блокировки антивирусом/ОС
-$deleted = $false
+# 2. Убираем возможный бэкап от прошлой попытки
+if (Test-Path $bak) {{ Remove-Item -Path $bak -Force -ErrorAction SilentlyContinue }}
+
+# 3. Сдвигаем старый EXE в сторону ПЕРЕИМЕНОВАНИЕМ.
+#    На NTFS переименование работает даже если файл ещё заблокирован процессом —
+#    в отличие от удаления. Это ключ к надёжности.
+$moved = $false
 for ($i = 0; $i -lt 30; $i++) {{
-    Remove-Item -Path $old -Force -ErrorAction SilentlyContinue
-    if (-not (Test-Path $old)) {{ $deleted = $true; break }}
+    Move-Item -Path $old -Destination $bak -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path $old)) {{ $moved = $true; break }}
     Start-Sleep -Seconds 1
 }}
-L "old deleted=$deleted"
+L "old moved aside=$moved"
 
-# 3. Перемещаем новый EXE на место старого
-if ($deleted) {{
-    for ($i = 0; $i -lt 10; $i++) {{
+# 4. Кладём новый EXE на освободившееся место старого
+$installed = $false
+if ($moved) {{
+    for ($i = 0; $i -lt 15; $i++) {{
         Move-Item -Path $new -Destination $old -Force -ErrorAction SilentlyContinue
-        if (Test-Path $old) {{ break }}
+        if ((Test-Path $old) -and (-not (Test-Path $new))) {{ $installed = $true; break }}
         Start-Sleep -Seconds 1
     }}
 }}
-
-$installed = (Test-Path $old) -and (-not (Test-Path $new))
 L "installed=$installed"
 
-# 4. Запускаем новую версию, либо честно сообщаем об ошибке с инструкцией
+# 5. Запускаем новую версию — бесшовно; либо откатываемся без «второй иконки»
 if ($installed) {{
-    Start-Sleep -Milliseconds 500
+    Start-Sleep -Milliseconds 300
     Start-Process -FilePath $old
     L "relaunched new version"
+    # Бэкап больше не нужен. Если занят антивирусом — удалится при след. старте.
+    Remove-Item -Path $bak -Force -ErrorAction SilentlyContinue
 }} else {{
-    L "FAILED to install (old deleted=$deleted)"
-    $msg = 'Не удалось применить обновление автоматически.' + [Environment]::NewLine + [Environment]::NewLine +
-           'Новая версия уже скачана. Закройте программу, удалите старый файл ' +
-           'и переименуйте "' + [IO.Path]::GetFileName($new) + '" в "' + $name + '".' + [Environment]::NewLine + [Environment]::NewLine +
+    L "FAILED to install (moved=$moved)"
+    # Откатываем старый EXE на место, чтобы пользователь не остался без программы
+    if ((-not (Test-Path $old)) -and (Test-Path $bak)) {{
+        Move-Item -Path $bak -Destination $old -Force -ErrorAction SilentlyContinue
+    }}
+    # Убираем скачанный дубль, чтобы НЕ появилась вторая иконка
+    Remove-Item -Path $new -Force -ErrorAction SilentlyContinue
+    $msg = 'Не удалось применить обновление автоматически.' + [Environment]::NewLine +
+           'Программа запущена в текущей версии — попробуйте обновиться позже.' + [Environment]::NewLine + [Environment]::NewLine +
            ('Лог: ' + $log)
     try {{ [System.Windows.Forms.MessageBox]::Show($msg, 'ПНОС — обновление', 'OK', 'Warning') | Out-Null }} catch {{ }}
-    # Чтобы пользователь не остался без программы — запускаем то, что доступно
     if (Test-Path $old) {{ Start-Process -FilePath $old }}
-    elseif (Test-Path $new) {{ Start-Process -FilePath $new }}
 }}
 
 Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
@@ -311,9 +325,17 @@ def apply_update_and_restart(new_exe_path: str):
     with open(ps1_path, "w", encoding="utf-8-sig") as f:
         f.write(ps1_content)
 
+    # Полный путь к powershell.exe — надёжнее, чем расчёт на PATH у замороженного EXE.
+    ps_exe = os.path.join(
+        os.environ.get("SystemRoot", r"C:\Windows"),
+        "System32", "WindowsPowerShell", "v1.0", "powershell.exe",
+    )
+    if not os.path.exists(ps_exe):
+        ps_exe = "powershell.exe"
+
     subprocess.Popen(
         [
-            "powershell.exe",
+            ps_exe,
             "-ExecutionPolicy", "Bypass",
             "-WindowStyle", "Hidden",
             "-NonInteractive",
@@ -322,4 +344,29 @@ def apply_update_and_restart(new_exe_path: str):
         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
         close_fds=True,
     )
-    sys.exit(0)
+
+    # Форсированно завершаем процесс. sys.exit() внутри Qt-слота лишь бросает
+    # SystemExit, который цикл событий может проглотить — тогда EXE останется
+    # запущенным и заблокированным. os._exit гарантирует немедленный выход и
+    # разблокировку файла для подмены.
+    os._exit(0)
+
+
+def cleanup_update_leftovers():
+    """Удаляет остаточные файлы обновления рядом с EXE.
+
+    Вызывается при старте программы. Подчищает:
+      - <EXE>.old — старую версию, сдвинутую в сторону при прошлом обновлении
+        (могла не удалиться сразу, если файл был занят антивирусом);
+      - PNOS_update.exe — недокачанный/незавершённый апдейт.
+    Так на рабочем столе не копятся лишние иконки.
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    current_dir = os.path.dirname(sys.executable)
+    for leftover in (sys.executable + ".old", os.path.join(current_dir, "PNOS_update.exe")):
+        try:
+            if os.path.exists(leftover):
+                os.remove(leftover)
+        except Exception:
+            pass  # занят — уберём при следующем запуске

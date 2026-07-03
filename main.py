@@ -23,6 +23,14 @@ def load_stylesheet() -> str:
 
 
 def main():
+    # Подчищаем остатки прошлого обновления (<EXE>.old, PNOS_update.exe),
+    # чтобы на рабочем столе не копились лишние иконки.
+    try:
+        from updater import cleanup_update_leftovers
+        cleanup_update_leftovers()
+    except Exception:
+        pass
+
     app = QApplication(sys.argv)
 
     # Шрифт по умолчанию
