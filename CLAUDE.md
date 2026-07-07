@@ -24,11 +24,17 @@ No test suite exists. Manual testing requires running the full GUI. Windows-only
 ## Architecture
 
 ### Entry flow
-`main.py` → `MainWindow` (PySide6 QMainWindow) → `QStackedWidget` with pages for each step → `workers/stage*_worker.py` (QThreads).
+`main.py` → `MainWindow` (`main_window.py`, PySide6 QMainWindow) → `QStackedWidget` with pages for each step → `workers/stage*_worker.py` (QThreads).
+
+### Startup performance — lazy imports (do not break)
+Heavy modules (pandas, aiohttp, win32com, python-docx) are deliberately **not** imported at module top level in `main.py` / `main_window.py`. Workers and `report_dialog` are imported lazily inside the stage-launch methods, and `main()` prewarms them in a background daemon thread after the window is shown (`_prewarm_heavy_imports`). Adding a top-level import of a worker or heavy library to these files silently reverts the fast-startup optimization.
 
 ### Key files
 | File | Purpose |
 |---|---|
+| `main_window.py` | All stage pages, sidebar navigation, log/activity-feed rendering, auto-mode stage chaining (Settings checkbox `chk_auto` → next stage starts automatically on `finished_ok`), and `_force_stop_active_stage` (emergency stop) |
+| `pages/settings_page.py` | Settings page — auto-mode checkbox, master-file path override, download speed toggle (🚀/🐢), update check & install buttons |
+| `report_dialog.py` | Detailed per-point result dialog shown after a stage finishes |
 | `config.py` | Single source of truth — Yandex Disk OAuth tokens, remote paths, folder names, macro paths |
 | `version.py` | `APP_VERSION` string — bump before every release |
 | `status_manager.py` | Per-point incremental tracking via hidden `.pnos_status.json` in each point folder |
