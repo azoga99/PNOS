@@ -37,20 +37,283 @@ import subprocess
 class MainWindow(QMainWindow):
     """Главное окно приложения ПНОС."""
 
+    # Индексы страниц в QStackedWidget
+    PAGE_SUMMARY = 7
+    PAGE_SETTINGS = 8
+    PAGE_OVERVIEW = 9
+
+    # Статус шага -> глиф-индикатор в сайдбаре
+    NAV_GLYPHS = {"idle": "○", "run": "⏳", "done": "✅", "error": "❌"}
+
+    # UI-шаг -> ключ статуса в .pnos_status.json (учитывает сдвиг воркеров)
+    STEP_STATUS_KEYS = {1: "stage1", 2: "stage2", 3: "manual3",
+                        4: "stage3", 5: "stage4", 6: "stage5", 7: "stage6"}
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("ПНОС — Пакетный генератор отчётов")
-        self.setMinimumSize(1100, 750)
-        self.resize(1200, 800)
+        self.setMinimumSize(1000, 680)
+        self.resize(1280, 820)
 
         self._workers = {}
         self._stage_results = {} # Храним итоги для общего отчета
         self._completed_stages = set() # Номера успешно завершенных этапов (0-5)
         self._start_time = None
         self._is_stopping = False
-        
+
+        # Текущая тема (light/dark) — берётся из QSettings
+        from PySide6.QtCore import QSettings
+        self._settings = QSettings("PNOS", "PNOS")
+        self._theme_name = self._settings.value("theme", "light")
+
+        # Таймер сессии для отображения времени в сайдбаре
+        from PySide6.QtCore import QTimer
+        self._session_timer = QTimer(self)
+        self._session_timer.setInterval(1000)
+        self._session_timer.timeout.connect(self._tick_session_timer)
+
         self.setWindowIcon(QIcon(resource_path(os.path.join("resources", "icon.ico"))))
         self._setup_ui()
+
+    # ─── Индикаторы статуса шагов в сайдбаре ───────────────────────
+    def _refresh_nav_button(self, idx: int):
+        """Обновляет текст кнопки шага с глифом статуса."""
+        glyph = self.NAV_GLYPHS.get(self._nav_status.get(idx, "idle"), "○")
+        self.nav_buttons[idx].setText(f"{glyph}  {self._nav_titles[idx]}")
+
+    def _set_nav_status(self, idx: int, status: str):
+        """Устанавливает статус шага ('idle'/'run'/'done'/'error')."""
+        if idx in self._nav_status:
+            self._nav_status[idx] = status
+            self._refresh_nav_button(idx)
+
+    def _tick_session_timer(self):
+        """Обновляет отображение времени сессии раз в секунду."""
+        if not self._start_time:
+            return
+        elapsed = int(time.time() - self._start_time)
+        m, s = divmod(elapsed, 60)
+        h, m = divmod(m, 60)
+        if h:
+            self.lbl_session_timer.setText(f"⏱ {h}:{m:02d}:{s:02d}")
+        else:
+            self.lbl_session_timer.setText(f"⏱ {m:02d}:{s:02d}")
+
+    # ─── Конструкторы блоков страниц ───────────────────────────────
+    def _build_page_header(self, icon: str, title: str, desc: str, warn: str = ""):
+        """Собирает шапку-карточку этапа. Возвращает готовый QFrame."""
+        card = QFrame()
+        card.setObjectName("page_header")
+        h = QHBoxLayout(card)
+        h.setContentsMargins(18, 16, 18, 16)
+        h.setSpacing(16)
+
+        lbl_icon = QLabel(icon)
+        lbl_icon.setObjectName("page_header_icon")
+        lbl_icon.setAlignment(Qt.AlignTop)
+        h.addWidget(lbl_icon)
+
+        col = QVBoxLayout()
+        col.setSpacing(4)
+        lbl_title = QLabel(title)
+        lbl_title.setObjectName("page_header_title")
+        lbl_title.setWordWrap(True)
+        col.addWidget(lbl_title)
+
+        lbl_desc = QLabel(desc)
+        lbl_desc.setObjectName("page_header_desc")
+        lbl_desc.setWordWrap(True)
+        col.addWidget(lbl_desc)
+
+        if warn:
+            lbl_warn = QLabel(warn)
+            lbl_warn.setObjectName("page_header_warn")
+            lbl_warn.setWordWrap(True)
+            col.addWidget(lbl_warn)
+
+        h.addLayout(col, 1)
+        return card
+
+    def _build_metrics_bar(self):
+        """
+        Собирает строку метрик этапа (Пунктов / Готово / Ошибок / Время).
+        Возвращает (frame, {ключ: QLabel}) — метки значений для обновления.
+        """
+        bar = QFrame()
+        bar.setObjectName("metrics_bar")
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(16, 10, 16, 10)
+        row.setSpacing(0)
+
+        specs = [
+            ("total", "Пунктов", "metric_value"),
+            ("done", "Готово", "metric_value_good"),
+            ("errors", "Ошибок", "metric_value_bad"),
+            ("skipped", "Пропущено", "metric_value_skip"),
+            ("time", "Время", "metric_value_accent"),
+        ]
+        labels = {}
+        for i, (key, caption, value_obj) in enumerate(specs):
+            if i:
+                div = QFrame()
+                div.setObjectName("metric_divider")
+                row.addWidget(div)
+
+            cell = QVBoxLayout()
+            cell.setSpacing(1)
+            cell.setAlignment(Qt.AlignCenter)
+            val = QLabel("—" if key != "time" else "00:00")
+            val.setObjectName(value_obj)
+            val.setAlignment(Qt.AlignCenter)
+            cap = QLabel(caption)
+            cap.setObjectName("metric_caption")
+            cap.setAlignment(Qt.AlignCenter)
+            cell.addWidget(val)
+            cell.addWidget(cap)
+            row.addLayout(cell, 1)
+            labels[key] = val
+
+        return bar, labels
+
+    # ─── Темы ──────────────────────────────────────────────────────
+    def apply_theme(self, theme_name: str = None):
+        """Применяет тему (light/dark) ко всему приложению и запоминает выбор."""
+        from theme import build_stylesheet
+        if theme_name:
+            self._theme_name = theme_name
+            self._settings.setValue("theme", theme_name)
+        app = QApplication.instance()
+        if app:
+            app.setStyleSheet(build_stylesheet(self._theme_name))
+
+    # ─── Страница «Обзор» ──────────────────────────────────────────
+    def _setup_overview_page(self):
+        """Матрица статусов: строки — пункты, столбцы — шаги."""
+        layout = QVBoxLayout(self.page_overview)
+        layout.setContentsMargins(2, 2, 6, 2)
+        layout.setSpacing(14)
+
+        layout.addWidget(self._build_page_header(
+            "📊", "Обзор пунктов",
+            "Сводная таблица прогресса по всем пунктам. Обновляется автоматически после каждого этапа."
+        ))
+
+        top_row = QHBoxLayout()
+        self.lbl_overview_summary = QLabel("")
+        self.lbl_overview_summary.setObjectName("card_description")
+        top_row.addWidget(self.lbl_overview_summary)
+        top_row.addStretch()
+        btn_refresh = QPushButton("🔄 Обновить")
+        btn_refresh.setObjectName("ghost_button")
+        btn_refresh.setCursor(Qt.PointingHandCursor)
+        btn_refresh.clicked.connect(self._refresh_overview)
+        top_row.addWidget(btn_refresh)
+        layout.addLayout(top_row)
+
+        self.overview_table = QTableWidget()
+        headers = ["Пункт", "1", "2", "3", "4", "5", "6", "7"]
+        self.overview_table.setColumnCount(len(headers))
+        self.overview_table.setHorizontalHeaderLabels(headers)
+        self.overview_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.overview_table.setSelectionMode(QTableWidget.NoSelection)
+        self.overview_table.verticalHeader().setVisible(False)
+        hh = self.overview_table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.Stretch)
+        for c in range(1, len(headers)):
+            hh.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        self.overview_table.setMinimumHeight(240)
+        layout.addWidget(self.overview_table, 1)
+
+        lbl_problems = QLabel("Проблемные пункты")
+        lbl_problems.setObjectName("section_label")
+        layout.addWidget(lbl_problems)
+        self.overview_problems = QListWidget()
+        self.overview_problems.setObjectName("activity_feed")
+        self.overview_problems.setMinimumHeight(120)
+        layout.addWidget(self.overview_problems)
+
+    def _scan_points(self):
+        """
+        Сканирует локальную папку и читает статусы каждого пункта.
+        Возвращает список словарей: {name, number, invalid, missing, steps{ui_step:bool}}.
+        """
+        import json
+        root = self._get_local_root()
+        result = []
+        if not root or not os.path.isdir(root):
+            return result
+
+        for name in sorted(os.listdir(root)):
+            folder = os.path.join(root, name)
+            if not os.path.isdir(folder):
+                continue
+            low = name.lower()
+            if not (low.startswith("п.") or low.startswith("п ") or low.startswith("пункт")):
+                continue
+
+            status_path = os.path.join(folder, ".pnos_status.json")
+            data = {}
+            if os.path.exists(status_path):
+                try:
+                    with open(status_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except Exception:
+                    data = {}
+
+            steps = {ui: bool(data.get(key, False))
+                     for ui, key in self.STEP_STATUS_KEYS.items()}
+            result.append({
+                "name": name,
+                "invalid": bool(data.get("invalid", False)) or ("не корректн" in low),
+                "missing": data.get("missing_folders", []),
+                "skipped": bool(data.get("skipped", False)),
+                "steps": steps,
+            })
+        return result
+
+    def _refresh_overview(self):
+        """Перечитывает статусы и перерисовывает матрицу обзора."""
+        points = self._scan_points()
+        self.overview_table.setRowCount(len(points))
+        self.overview_problems.clear()
+
+        done_all = 0
+        for r, pt in enumerate(points):
+            name_item = QTableWidgetItem(pt["name"])
+            self.overview_table.setItem(r, 0, name_item)
+
+            invalid = pt["invalid"]
+            skipped = pt["skipped"]
+            all_done = True
+            for ui_step in range(1, 8):
+                if invalid:
+                    glyph = "🚫"
+                    all_done = False
+                elif skipped and ui_step >= 3:
+                    glyph = "⏭"
+                elif pt["steps"].get(ui_step):
+                    glyph = "✅"
+                else:
+                    glyph = "⏳"
+                    all_done = False
+                cell = QTableWidgetItem(glyph)
+                cell.setTextAlignment(Qt.AlignCenter)
+                self.overview_table.setItem(r, ui_step, cell)
+            if all_done:
+                done_all += 1
+
+            if invalid:
+                reason = ", ".join(pt["missing"]) if pt["missing"] else "нет обязательных папок"
+                self.overview_problems.addItem(QListWidgetItem(f"🚫 {pt['name']}: не будет обработан ({reason})"))
+            elif skipped:
+                self.overview_problems.addItem(QListWidgetItem(f"⏭ {pt['name']}: пропущен пользователем"))
+
+        total = len(points)
+        self.lbl_overview_summary.setText(
+            f"Всего пунктов: {total} · Полностью готовы: {done_all}"
+        )
+        if self.overview_problems.count() == 0:
+            self.overview_problems.addItem(QListWidgetItem("✨ Проблемных пунктов нет"))
 
     def _setup_ui(self):
         central = QWidget()
@@ -101,22 +364,37 @@ class MainWindow(QMainWindow):
         nav_container = QWidget()
         nav_layout = QVBoxLayout(nav_container)
         nav_layout.setContentsMargins(0, 10, 0, 0)
-        nav_layout.setSpacing(5)
+        nav_layout.setSpacing(3)
+
+        # Базовые названия шагов и текущий статус (для индикатора в сайдбаре)
+        self._nav_titles = {}
+        self._nav_status = {}   # idx -> 'idle' | 'run' | 'done' | 'error'
 
         for num, title in stages:
-            btn = QPushButton(f"Шаг {num}: {title}")
+            idx = num - 1
+            self._nav_titles[idx] = f"Шаг {num}: {title}"
+            self._nav_status[idx] = "idle"
+
+            btn = QPushButton()
             btn.setObjectName("nav_button")
             btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
-            
-            # Сохраняем индекс страницы для переключения
-            idx = num - 1
             btn.clicked.connect(lambda checked, i=idx: self._switch_page(i))
-            
+
             self.nav_buttons.append(btn)
             nav_layout.addWidget(btn)
+            self._refresh_nav_button(idx)
 
         sidebar_layout.addWidget(nav_container)
+
+        # Пункт «Обзор» (страница-матрица статусов)
+        self.btn_overview = QPushButton("📊 Обзор")
+        self.btn_overview.setObjectName("nav_button")
+        self.btn_overview.setCheckable(True)
+        self.btn_overview.setCursor(Qt.PointingHandCursor)
+        self.btn_overview.clicked.connect(lambda: self._switch_page(self.PAGE_OVERVIEW))
+        sidebar_layout.addWidget(self.btn_overview)
+
         sidebar_layout.addStretch()
         
         # ─── Кнопка настроек внизу ─────────────────────────────────
@@ -124,30 +402,37 @@ class MainWindow(QMainWindow):
         self.btn_settings.setObjectName("nav_button")
         self.btn_settings.setCheckable(True)
         self.btn_settings.setCursor(Qt.PointingHandCursor)
-        self.btn_settings.clicked.connect(lambda: self._switch_page(8))
+        self.btn_settings.clicked.connect(lambda: self._switch_page(self.PAGE_SETTINGS))
         sidebar_layout.addWidget(self.btn_settings)
         sidebar_layout.addSpacing(10)
 
         # ─── Глобальный прогресс ───────────────────────────────────
         progress_container = QWidget()
         progress_layout = QVBoxLayout(progress_container)
-        progress_layout.setContentsMargins(20, 10, 20, 30)
-        
-        lbl_global = QLabel("Общий прогресс:")
-        lbl_global.setStyleSheet("color: #94a3b8; font-weight: bold; font-size: 11px;")
-        progress_layout.addWidget(lbl_global)
-        
+        progress_layout.setContentsMargins(20, 10, 20, 24)
+
+        head_row = QHBoxLayout()
+        lbl_global = QLabel("Общий прогресс")
+        lbl_global.setObjectName("global_caption")
+        head_row.addWidget(lbl_global)
+        head_row.addStretch()
+        self.lbl_session_timer = QLabel("")
+        self.lbl_session_timer.setObjectName("session_timer")
+        head_row.addWidget(self.lbl_session_timer)
+        progress_layout.addLayout(head_row)
+
         self.global_progress = QProgressBar()
+        self.global_progress.setObjectName("global_progress")
         self.global_progress.setValue(0)
         self.global_progress.setMaximum(100)
         self.global_progress.setFixedHeight(12)
         self.global_progress.setTextVisible(False)
-        self.global_progress.setStyleSheet("""
-            QProgressBar { border: none; background-color: #334155; border-radius: 6px; }
-            QProgressBar::chunk { background-color: #2dd4bf; border-radius: 6px; }
-        """)
         progress_layout.addWidget(self.global_progress)
-        
+
+        self.lbl_session_points = QLabel("")
+        self.lbl_session_points.setObjectName("global_caption")
+        progress_layout.addWidget(self.lbl_session_points)
+
         sidebar_layout.addWidget(progress_container)
 
         main_layout.addWidget(sidebar)
@@ -162,13 +447,13 @@ class MainWindow(QMainWindow):
         # StackedWidget для страниц (Этапов) (центрированный с макс-шириной)
         stack_wrapper = QHBoxLayout()
         stack_wrapper.addStretch()
-        
+
         self.pages_stack = QStackedWidget()
-        self.pages_stack.setMaximumWidth(850)
+        self.pages_stack.setMaximumWidth(1040)
         stack_wrapper.addWidget(self.pages_stack, 1)
-        
+
         stack_wrapper.addStretch()
-        
+
         content_layout.addLayout(stack_wrapper)
 
         # ─── СТРАНИЦА 1: Настройки и Запуск ───────────────────────
@@ -176,151 +461,131 @@ class MainWindow(QMainWindow):
         self._setup_page1()
         self.pages_stack.addWidget(self.page1)
 
-        # ─── СТРАНИЦЫ 2-5: Заглушки ───────────────────────────────
+        # ─── СТРАНИЦЫ ШАГОВ 2-7 ───────────────────────────────────
         self.stub_pages = []
-        
+
         stage_meta = {
-            2: {"title": "Шаг 2: Копирование таблиц", "desc": "Извлечение 3-й таблицы из 'Акта замеров' и перенос её на листы 'Импорт' без форматирования.", "warn": ""},
-            3: {"title": "Шаг 3: Ручной контроль", "desc": "Проверьте файлы перед запуском макросов. Этот этап выполняется вручную.", "warn": ""},
-            4: {"title": "Шаг 4: Запуск макросов", "desc": "Перенос переменных из Паспорта (Word) в Excel и автоматический запуск макросов Restore и Save.", "warn": "⚠️ Во время работы этого этапа не открывайте другие файлы Excel и не перехватывайте фокус мыши!"},
-            5: {"title": "Шаг 5: Создание отчёта", "desc": "Генерация финального отчета Word.", "warn": ""},
-            6: {"title": "Шаг 6: Вставка картинок", "desc": "Пост-обработка: вставка скачанных фотографий в отчёт (в разработке).", "warn": ""},
-            7: {"title": "Шаг 7: Вставка актов ГИ", "desc": "Скачивание актов гидроиспытаний по номеру участка (паспорт B12) и вставка их в отчёт по метке [ГИ]. Затем пересчёт номеров страниц в СОДЕРЖАНИИ.", "warn": ""}
+            2: {"icon": "📋", "title": "Шаг 2: Копирование таблиц", "desc": "Извлечение 3-й таблицы из «Акта замеров» и перенос её на листы «Импорт» без форматирования.", "warn": ""},
+            3: {"icon": "✍️", "title": "Шаг 3: Ручной контроль", "desc": "Заполните данные паспорта для каждого пункта — они будут записаны в Excel автоматически.", "warn": ""},
+            4: {"icon": "⚙️", "title": "Шаг 4: Запуск макросов", "desc": "Перенос переменных из Паспорта (Word) в Excel и автоматический запуск макросов Restore и Save.", "warn": "⚠️ Во время работы этого этапа не открывайте другие файлы Excel и не перехватывайте фокус мыши!"},
+            5: {"icon": "📄", "title": "Шаг 5: Создание отчёта", "desc": "Генерация финального отчёта Word (слияние, спецификация, остаточный ресурс).", "warn": ""},
+            6: {"icon": "🖼️", "title": "Шаг 6: Вставка картинок", "desc": "Пост-обработка: вставка скачанных фотографий в отчёт по меткам [ФОТО].", "warn": ""},
+            7: {"icon": "📎", "title": "Шаг 7: Вставка актов ГИ", "desc": "Скачивание актов гидроиспытаний по номеру участка и вставка их в отчёт по метке [ГИ], затем пересчёт номеров страниц в СОДЕРЖАНИИ.", "warn": ""},
+        }
+        run_handlers = {
+            2: self._start_stage2, 3: self._start_manual_stage3, 4: self._start_stage3,
+            5: self._start_stage4, 6: self._start_stage5, 7: self._start_stage6,
         }
 
         for stage_num in range(2, 8):
-            page = QWidget()
-            layout = QVBoxLayout(page)
-            layout.setContentsMargins(0, 0, 0, 0)
-            
             meta = stage_meta.get(stage_num, {})
-            lbl = QLabel(meta.get("title", f"Настройки для Шага {stage_num}"))
-            lbl.setObjectName("app_title")
-            layout.addWidget(lbl)
-            
-            desc = QLabel(meta.get("desc", ""))
-            desc.setObjectName("card_description")
-            desc.setWordWrap(True)
-            layout.addWidget(desc)
-            
-            if stage_num == 3:
-                from PySide6.QtWidgets import QTextBrowser
-                instr_html = """
-                <h3 style="color:#2C3E50; margin-bottom: 5px;">Этап ручного контроля</h3>
-                <p>Обязательно проверьте выполнение данного этапа перед переходом к следующему!</p>
-                <b>1. Предназначение трубопровода (из старой ЭПБ, п. 6)</b><br>
-                • Если прописано конкретное назначение («для транспортировки...») — переносите данные как есть.<br>
-                • Если общая формулировка («для транспортировки рабочей среды») — не копируйте её. Замените общие слова на конкретное вещество (например: «предназначен для транспортировки рафината растворителя»).<br><br>
 
-                <b>2. Работа с датами</b><br>
-                • <b>Дата следующей ревизии (ячейка B28)</b>: Оставьте поле пустым. Эта информация нигде не участвует.<br>
-                • <b>Дата паспорта (ячейка B47)</b>: Если указана в исходном документе — впишите её. Если даты нет — просто оставьте поле пустым.<br><br>
+            # Прокручиваемый контейнер — контент не «давится» в маленьком окне
+            page = QWidget()
+            page_outer = QVBoxLayout(page)
+            page_outer.setContentsMargins(0, 0, 0, 0)
 
-                <b>3. Данные предыдущей ЭПБ</b><br>
-                • <b>Проводилась или нет (ячейка B51)</b>: Сначала укажите, проводилась ли ЭПБ ранее.<br>
-                • <b>Организация (ячейка B52)</b>: Скопируйте название организации с титульного листа предыдущей экспертизы.<br>
-                • <b>Регистрационный номер (ячейка B53)</b>: В первую очередь ищите номер Ростехнадзора (на титульном листе/в уведомлении). Если его нет, впишите внутренний номер заключения от самой организации.<br>
-                • <b>Дата ЭПБ (ячейка B54)</b>: Дата подписания документа с титульного листа.<br>
-                • <b>Количество листов (ячейка B55)</b>: Общее количество листов самого заключения (лист уведомления Ростехнадзора <b>не учитывается</b>).<br><br>
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            content = QWidget()
+            layout = QVBoxLayout(content)
+            layout.setContentsMargins(2, 2, 6, 2)
+            layout.setSpacing(14)
+            scroll.setWidget(content)
+            page_outer.addWidget(scroll)
 
-                <b>АКТ УЗК:</b> таблица заполняется вручную.
-                """
-                instruction_box = QTextBrowser()
-                instruction_box.setHtml(instr_html)
-                instruction_box.setStyleSheet("background-color: #ffffff; color: #1e293b; border: 1px solid #E0E0E0; border-radius: 6px; padding: 10px; font-size: 18px;")
-                layout.addWidget(instruction_box)
-            
-            if meta.get("warn"):
-                warn = QLabel(meta.get("warn"))
-                warn.setStyleSheet("color: #fbbf24; font-weight: bold; margin-top: 10px;")
-                warn.setWordWrap(True)
-                layout.addWidget(warn)
-            
-            if stage_num != 3:
-                layout.addStretch()
+            # Шапка-карточка
+            layout.addWidget(self._build_page_header(
+                meta.get("icon", "•"), meta.get("title", ""), meta.get("desc", ""), meta.get("warn", "")
+            ))
 
+            # Строка метрик
+            metrics_bar, metric_labels = self._build_metrics_bar()
+            layout.addWidget(metrics_bar)
+
+            # Кнопки запуска/остановки
             btn_layout = QHBoxLayout()
-            btn_run = QPushButton(f"Запустить {meta.get('title', f'Шаг {stage_num}').split(':')[0]}")
+            run_caption = "Продолжить" if stage_num == 3 else f"Запустить {meta.get('title', '').split(':')[0]}"
+            btn_run = QPushButton(run_caption)
             btn_run.setObjectName("card_button")
             btn_run.setProperty("original_text", btn_run.text())
-            btn_run.setFixedWidth(200)
+            btn_run.setMinimumWidth(220)
             btn_run.setCursor(Qt.PointingHandCursor)
-            
+
             btn_stop = QPushButton("⏹ Остановить")
             btn_stop.setObjectName("stop_button")
-            btn_stop.setFixedWidth(120)
+            btn_stop.setMinimumWidth(130)
             btn_stop.setCursor(Qt.PointingHandCursor)
             btn_stop.setEnabled(False)
             btn_stop.clicked.connect(self._force_stop_active_stage)
 
-            # Привязываем к заглушкам
-            if stage_num == 2: btn_run.clicked.connect(self._start_stage2)
-            if stage_num == 3: btn_run.clicked.connect(self._start_manual_stage3)
-            if stage_num == 4: btn_run.clicked.connect(self._start_stage3)
-            if stage_num == 5: btn_run.clicked.connect(self._start_stage4)
-            if stage_num == 6: btn_run.clicked.connect(self._start_stage5)
-            if stage_num == 7: btn_run.clicked.connect(self._start_stage6)
+            btn_open_excel = QPushButton("📂 Открыть в Excel")
+            btn_open_excel.setObjectName("ghost_button")
+            btn_open_excel.setCursor(Qt.PointingHandCursor)
+            btn_open_excel.setVisible(False)  # используется только на шаге 3 (этап B)
+
+            if stage_num in run_handlers:
+                btn_run.clicked.connect(run_handlers[stage_num])
 
             btn_layout.addStretch()
             btn_layout.addWidget(btn_run)
+            btn_layout.addWidget(btn_open_excel)
             btn_layout.addWidget(btn_stop)
             btn_layout.addStretch()
             layout.addLayout(btn_layout)
 
-            # Лента активности вместо одного лейбла
-            act_list = QListWidget()
-            act_list.setObjectName("activity_feed")
-            act_list.setFixedHeight(100)
-            layout.addWidget(act_list)
-
-            # Таблица предпросмотра (только для 2 и 4 этапов)
-            preview_table = None
-            if stage_num in (2, 4):
-                preview_table = QTableWidget()
-                preview_table.setColumnCount(5) # примерно 5 колонок для превью
-                preview_table.horizontalHeader().setVisible(False)
-                preview_table.verticalHeader().setVisible(False)
-                preview_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-                preview_table.setEditTriggers(QTableWidget.NoEditTriggers)
-                preview_table.setSelectionMode(QTableWidget.NoSelection)
-                preview_table.setFixedHeight(120)
-                preview_table.setStyleSheet("""
-                    QTableWidget {
-                        background-color: #1e293b;
-                        gridline-color: #334155;
-                        color: #94a3b8;
-                        font-size: 10px;
-                        border: 1px solid #334155;
-                        border-radius: 4px;
-                    }
-                """)
-                preview_table.hide() # скрыта по умолчанию
-                layout.addWidget(preview_table)
-
-            # Прогресс бар
+            # Прогресс-бар
             progress = QProgressBar()
             progress.setValue(0)
             progress.setFixedHeight(10)
             progress.setTextVisible(False)
             layout.addWidget(progress)
 
-            # Интегрированная таблица отчета
+            # Лента активности
+            lbl_act = QLabel("История действий")
+            lbl_act.setObjectName("section_label")
+            layout.addWidget(lbl_act)
+            act_list = QListWidget()
+            act_list.setObjectName("activity_feed")
+            act_list.setMinimumHeight(110)
+            layout.addWidget(act_list)
+
+            # Таблица предпросмотра (только для этапов 2 и 4)
+            preview_table = None
+            if stage_num in (2, 4):
+                preview_table = QTableWidget()
+                preview_table.setObjectName("preview_table")
+                preview_table.setColumnCount(5)
+                preview_table.horizontalHeader().setVisible(False)
+                preview_table.verticalHeader().setVisible(False)
+                preview_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+                preview_table.setEditTriggers(QTableWidget.NoEditTriggers)
+                preview_table.setSelectionMode(QTableWidget.NoSelection)
+                preview_table.setMinimumHeight(120)
+                preview_table.hide()
+                layout.addWidget(preview_table)
+
+            # Интегрированная таблица отчёта
             report_table = QTableWidget()
             report_table.setEditTriggers(QTableWidget.NoEditTriggers)
             report_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
             report_table.setAlternatingRowColors(True)
-            report_table.setFixedHeight(250)
+            report_table.setMinimumHeight(220)
             report_table.hide()
-            layout.addWidget(report_table)
-            
+            layout.addWidget(report_table, 1)
+
             self.stub_pages.append({
                 "page": page,
                 "btn_run": btn_run,
                 "btn_stop": btn_stop,
+                "btn_open_excel": btn_open_excel,
                 "progress": progress,
                 "activity_list": act_list,
                 "preview_table": preview_table,
-                "report_table": report_table
+                "report_table": report_table,
+                "metrics": metric_labels,
             })
             self.pages_stack.addWidget(page)
 
@@ -333,6 +598,14 @@ class MainWindow(QMainWindow):
         self.page_settings = SettingsPage()
         self.pages_stack.addWidget(self.page_settings)
 
+        # ─── СТРАНИЦА: ОБЗОР (матрица статусов) ───────────────────
+        self.page_overview = QWidget()
+        self._setup_overview_page()
+        self.pages_stack.addWidget(self.page_overview)
+
+        # Переключение темы из настроек
+        self.page_settings.theme_changed.connect(self.apply_theme)
+
         main_layout.addWidget(content_frame)
 
         # Выбираем первую страницу по умолчанию
@@ -343,7 +616,10 @@ class MainWindow(QMainWindow):
         self.pages_stack.setCurrentIndex(index)
         for i, btn in enumerate(self.nav_buttons):
             btn.setChecked(i == index)
-        self.btn_settings.setChecked(index == 8)
+        self.btn_settings.setChecked(index == self.PAGE_SETTINGS)
+        self.btn_overview.setChecked(index == self.PAGE_OVERVIEW)
+        if index == self.PAGE_OVERVIEW:
+            self._refresh_overview()
 
     def _setup_page1(self):
         """Создает UI для первого этапа (Настройки и парсинг)."""
@@ -424,13 +700,13 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(ctrl_layout)
 
         # Лента активности для Этапа 1
-        lbl_act = QLabel("История действий:")
-        lbl_act.setStyleSheet("color: #64748b; font-weight: bold; font-size: 11px; margin-top: 10px;")
+        lbl_act = QLabel("История действий")
+        lbl_act.setObjectName("section_label")
         main_layout.addWidget(lbl_act)
-        
+
         self.stage1_activity = QListWidget()
         self.stage1_activity.setObjectName("activity_feed")
-        self.stage1_activity.setFixedHeight(120)
+        self.stage1_activity.setMinimumHeight(120)
         main_layout.addWidget(self.stage1_activity)
 
         # Интегрированный отчет для Этапа 1
@@ -439,7 +715,7 @@ class MainWindow(QMainWindow):
         self.stage1_report_table.setHorizontalHeaderLabels(["№ Пункта", "Паспорт", "Первичка", "Стар. ЭПБ", "Исполнит.", "Акт отбр.", "Результат"])
         self.stage1_report_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.stage1_report_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.stage1_report_table.setFixedHeight(180)
+        self.stage1_report_table.setMinimumHeight(180)
         self.stage1_report_table.hide()
         main_layout.addWidget(self.stage1_report_table)
 
@@ -457,11 +733,11 @@ class MainWindow(QMainWindow):
 
         self.summary_card = QFrame()
         self.summary_card.setObjectName("settings_panel")
-        self.summary_card.setStyleSheet("background-color: #1e293b; border-radius: 12px; padding: 30px;")
         s_layout = QVBoxLayout(self.summary_card)
-        
+        s_layout.setContentsMargins(30, 30, 30, 30)
+
         self.lbl_summary_stats = QLabel("Общая статистика будет здесь...")
-        self.lbl_summary_stats.setStyleSheet("font-size: 16px; color: #f8fafc;")
+        self.lbl_summary_stats.setObjectName("summary_stats")
         self.lbl_summary_stats.setWordWrap(True)
         self.lbl_summary_stats.setAlignment(Qt.AlignCenter)
         s_layout.addWidget(self.lbl_summary_stats)
@@ -572,6 +848,9 @@ class MainWindow(QMainWindow):
             return
 
         self._start_time = time.time()
+        self._session_timer.start()
+        self.lbl_session_points.setText(f"Пунктов: {len(manual_points)}")
+        self._set_nav_status(0, "run")
         self._stage_results = {}
         self.btn_start_stage1.setEnabled(False)
         self.btn_start_stage1.setText("Выполняется...")
@@ -646,12 +925,13 @@ class MainWindow(QMainWindow):
         self.btn_stop_stage1.setEnabled(False) # Выключаем СТОП
         self.btn_start_stage1.setText("Запустить создание структуры")
         self.btn_start_stage1.setEnabled(True)
-        
+        self._set_nav_status(0, "done" if success else "error")
+
         if success:
             self._completed_stages.add(0)
             if len(self.nav_buttons) > 1:
                 self._switch_page(1)
-                
+
             if self.page_settings.chk_auto.isChecked():
                 self.stub_pages[0]["btn_run"].click()
 
@@ -660,6 +940,7 @@ class MainWindow(QMainWindow):
 
     def _start_stage2(self):
         local_root = self._get_local_root()
+        self._set_nav_status(1, "run")
         p = self.stub_pages[0]
         btn, prog, act_list, stop, report_table = p["btn_run"], p["progress"], p["activity_list"], p["btn_stop"], p["report_table"]
         preview_table = p["preview_table"]
@@ -746,6 +1027,7 @@ class MainWindow(QMainWindow):
 
     def _start_stage3(self):
         local_root = self._get_local_root()
+        self._set_nav_status(3, "run")
         p = self.stub_pages[2] # Шаг 4: Запуск макросов
         btn, prog, act_list, stop, report_table = p["btn_run"], p["progress"], p["activity_list"], p["btn_stop"], p["report_table"]
         preview_table = p["preview_table"]
@@ -774,6 +1056,7 @@ class MainWindow(QMainWindow):
 
     def _start_stage4(self):
         local_root = self._get_local_root()
+        self._set_nav_status(4, "run")
         p = self.stub_pages[3] # Шаг 5: Создание отчета
         btn, prog, act_list, stop, report_table = p["btn_run"], p["progress"], p["activity_list"], p["btn_stop"], p["report_table"]
         
@@ -795,6 +1078,7 @@ class MainWindow(QMainWindow):
 
     def _start_stage5(self):
         local_root = self._get_local_root()
+        self._set_nav_status(5, "run")
         p = self.stub_pages[4] # Шаг 6: Вставка картинок
         btn, prog, act_list, stop, report_table = p["btn_run"], p["progress"], p["activity_list"], p["btn_stop"], p["report_table"]
         btn.setText("Выполняется...")
@@ -815,6 +1099,7 @@ class MainWindow(QMainWindow):
 
     def _start_stage6(self):
         local_root = self._get_local_root()
+        self._set_nav_status(6, "run")
         p = self.stub_pages[5] # Шаг 7: Вставка актов ГИ
         btn, prog, act_list, stop, report_table = p["btn_run"], p["progress"], p["activity_list"], p["btn_stop"], p["report_table"]
         btn.setText("Выполняется...")
@@ -839,6 +1124,7 @@ class MainWindow(QMainWindow):
         stop.setEnabled(False)
         btn.setText(btn.property("original_text"))
         btn.setEnabled(True)
+        self._set_nav_status(step_idx, "done" if success else "error")
         if success:
             self._completed_stages.add(step_idx)
             self._add_activity(step_idx, "Этап успешно завершен!", "done")
@@ -847,7 +1133,7 @@ class MainWindow(QMainWindow):
             if next_actual_stage < len(self.nav_buttons):
                 self.nav_buttons[next_actual_stage].setEnabled(True)
                 self._switch_page(next_actual_stage)
-                
+
                 # Если авторежим и это не переход к ручному шагу 3 (индекс 2)
                 if self.page_settings.chk_auto.isChecked():
                     if next_actual_stage != 2:
@@ -855,8 +1141,9 @@ class MainWindow(QMainWindow):
                         QTimer.singleShot(1000, self.stub_pages[next_actual_stage - 1]["btn_run"].click)
             else:
                 # Все этапы завершены -> Перейти к глобальному отчету
+                self._session_timer.stop()
                 self._calculate_global_summary()
-                self._switch_page(7)
+                self._switch_page(self.PAGE_SUMMARY)
         self._update_global_progress()
 
     def _update_global_progress(self):
@@ -914,9 +1201,15 @@ class MainWindow(QMainWindow):
                         p["btn_run"].setEnabled(True)
                         p["btn_run"].setText(p["btn_run"].property("original_text"))
                         p["btn_stop"].setEnabled(False)
-                    except Exception: 
+                    except Exception:
                         continue
-            
+
+            # Сбрасываем индикаторы «выполняется» в сайдбаре
+            self._session_timer.stop()
+            for idx, st in list(self._nav_status.items()):
+                if st == "run":
+                    self._set_nav_status(idx, "idle")
+
             self._append_log("✅ Система готова к новому запуску.")
             
         except Exception as e:

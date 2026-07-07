@@ -7,19 +7,19 @@
 import sys
 import os
 
+from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QFont
 
 from main_window import MainWindow
-from utils import resource_path
+from theme import build_stylesheet
+
 
 def load_stylesheet() -> str:
-    """Загружает QSS стили из файла."""
-    style_path = resource_path(os.path.join("resources", "style.qss"))
-    if os.path.exists(style_path):
-        with open(style_path, "r", encoding="utf-8") as f:
-            return f.read()
-    return ""
+    """Собирает QSS для текущей темы (light/dark) из QSettings."""
+    settings = QSettings("PNOS", "PNOS")
+    theme_name = settings.value("theme", "light")
+    return build_stylesheet(theme_name)
 
 
 def main():
