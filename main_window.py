@@ -60,6 +60,8 @@ class MainWindow(QMainWindow):
         self._completed_stages = set() # Номера успешно завершенных этапов (0-5)
         self._start_time = None
         self._is_stopping = False
+        self._active_metrics = None      # метки метрик текущего этапа
+        self._stage_start_time = None    # время старта текущего этапа (для метрики «Время»)
 
         # Текущая тема (light/dark) — берётся из QSettings
         from PySide6.QtCore import QSettings
@@ -88,16 +90,55 @@ class MainWindow(QMainWindow):
             self._refresh_nav_button(idx)
 
     def _tick_session_timer(self):
-        """Обновляет отображение времени сессии раз в секунду."""
-        if not self._start_time:
+        """Обновляет время сессии и время текущего этапа раз в секунду."""
+        if self._start_time:
+            elapsed = int(time.time() - self._start_time)
+            m, s = divmod(elapsed, 60)
+            h, m = divmod(m, 60)
+            self.lbl_session_timer.setText(
+                f"⏱ {h}:{m:02d}:{s:02d}" if h else f"⏱ {m:02d}:{s:02d}")
+        # Время текущего этапа в его строке метрик
+        if self._active_metrics and self._stage_start_time:
+            se = int(time.time() - self._stage_start_time)
+            self._active_metrics["time"].setText(f"{se // 60:02d}:{se % 60:02d}")
+
+    def _begin_stage_metrics(self, metrics_labels):
+        """Отмечает строку метрик как активную и запускает отсчёт времени этапа."""
+        self._active_metrics = metrics_labels
+        self._stage_start_time = time.time()
+        if metrics_labels:
+            for key in ("total", "done", "errors", "skipped"):
+                metrics_labels[key].setText("—" if key == "total" else "0")
+            metrics_labels["time"].setText("00:00")
+
+    def _apply_metrics(self, labels, total=None, done=None, errors=None, skipped=None):
+        """Обновляет значения строки метрик (пропущенные аргументы не трогает)."""
+        if not labels:
             return
-        elapsed = int(time.time() - self._start_time)
-        m, s = divmod(elapsed, 60)
-        h, m = divmod(m, 60)
-        if h:
-            self.lbl_session_timer.setText(f"⏱ {h}:{m:02d}:{s:02d}")
-        else:
-            self.lbl_session_timer.setText(f"⏱ {m:02d}:{s:02d}")
+        if total is not None:
+            labels["total"].setText(str(total))
+        if done is not None:
+            labels["done"].setText(str(done))
+        if errors is not None:
+            labels["errors"].setText(str(errors))
+        if skipped is not None:
+            labels["skipped"].setText(str(skipped))
+
+    @staticmethod
+    def _count_results(details: list):
+        """Считает (готово, ошибки, пропущено) по списку строк-отчётов этапов 2-7."""
+        done = errors = skipped = 0
+        for d in details:
+            res = str(d.get("Результат", "")).lower()
+            if "пропущен" in res or "⚪" in res:
+                skipped += 1
+            elif "успешно" in res or "✅" in res or "✔" in res:
+                done += 1
+            elif res and ("❌" in res or "ошибк" in res or "нет " in res or "не " in res):
+                errors += 1
+            else:
+                done += 1
+        return done, errors, skipped
 
     # ─── Конструкторы блоков страниц ───────────────────────────────
     def _build_page_header(self, icon: str, title: str, desc: str, warn: str = ""):
@@ -1157,6 +1198,10 @@ class MainWindow(QMainWindow):
         ctrl_layout.addStretch()
         main_layout.addLayout(ctrl_layout)
 
+        # Строка метрик этапа 1
+        metrics_bar, self.stage1_metrics = self._build_metrics_bar()
+        main_layout.addWidget(metrics_bar)
+
         # Лента активности для Этапа 1
         lbl_act = QLabel("История действий")
         lbl_act.setObjectName("section_label")
@@ -1178,43 +1223,84 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.stage1_report_table)
 
 
+    def _build_stat_card(self, caption: str, value_obj: str):
+        """Карточка статистики для итоговой страницы. Возвращает (frame, value_label)."""
+        card = QFrame()
+        card.setObjectName("stat_box")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(16, 14, 16, 14)
+        v.setSpacing(2)
+        val = QLabel("—")
+        val.setObjectName(value_obj)
+        val.setAlignment(Qt.AlignCenter)
+        cap = QLabel(caption)
+        cap.setObjectName("report_stat")
+        cap.setAlignment(Qt.AlignCenter)
+        v.addWidget(val)
+        v.addWidget(cap)
+        return card, val
+
     def _setup_summary_page(self):
-        """Создает страницу финального общего отчета."""
+        """Создает страницу финального общего отчёта с карточками статистики."""
         layout = QVBoxLayout(self.page_summary)
-        layout.setContentsMargins(40, 40, 40, 40)
-        layout.setSpacing(30)
+        layout.setContentsMargins(40, 30, 40, 30)
+        layout.setSpacing(20)
 
         title = QLabel("🏁 Работа завершена!")
         title.setObjectName("app_title")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
-        self.summary_card = QFrame()
-        self.summary_card.setObjectName("settings_panel")
-        s_layout = QVBoxLayout(self.summary_card)
-        s_layout.setContentsMargins(30, 30, 30, 30)
+        # Ряд карточек статистики
+        cards_row = QHBoxLayout()
+        cards_row.setSpacing(14)
+        card_done, self.sum_done = self._build_stat_card("Обработано", "metric_value_good")
+        card_err, self.sum_errors = self._build_stat_card("С ошибками", "metric_value_bad")
+        card_skip, self.sum_skipped = self._build_stat_card("Пропущено", "metric_value_skip")
+        card_time, self.sum_time = self._build_stat_card("Время", "metric_value_accent")
+        for c in (card_done, card_err, card_skip, card_time):
+            cards_row.addWidget(c, 1)
+        layout.addLayout(cards_row)
 
-        self.lbl_summary_stats = QLabel("Общая статистика будет здесь...")
-        self.lbl_summary_stats.setObjectName("summary_stats")
-        self.lbl_summary_stats.setWordWrap(True)
-        self.lbl_summary_stats.setAlignment(Qt.AlignCenter)
-        s_layout.addWidget(self.lbl_summary_stats)
-        
-        layout.addWidget(self.summary_card)
+        # Список ошибок
+        lbl_err = QLabel("Проблемы")
+        lbl_err.setObjectName("section_label")
+        layout.addWidget(lbl_err)
+        self.summary_errors = QListWidget()
+        self.summary_errors.setObjectName("activity_feed")
+        self.summary_errors.setMinimumHeight(160)
+        layout.addWidget(self.summary_errors, 1)
 
-        btn_report = QPushButton("📄 Открыть подробный отчет")
+        # Кнопки
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_open = QPushButton("📁 Открыть папку с отчётами")
+        btn_open.setObjectName("ghost_button")
+        btn_open.setCursor(Qt.PointingHandCursor)
+        btn_open.clicked.connect(self._open_reports_folder)
+        btn_report = QPushButton("📄 Подробный отчёт")
         btn_report.setObjectName("card_button")
-        btn_report.setFixedWidth(300)
+        btn_report.setCursor(Qt.PointingHandCursor)
         btn_report.clicked.connect(self._show_final_report_dialog)
-        layout.addWidget(btn_report, alignment=Qt.AlignCenter)
-
-        btn_finish = QPushButton("Вернуться к первому шагу")
-        btn_finish.setObjectName("stop_button") # Использовал другой стиль для контраста
-        btn_finish.setFixedWidth(300)
+        btn_finish = QPushButton("↩ К первому шагу")
+        btn_finish.setObjectName("ghost_button")
+        btn_finish.setCursor(Qt.PointingHandCursor)
         btn_finish.clicked.connect(lambda: self._switch_page(0))
-        
-        layout.addWidget(btn_finish, alignment=Qt.AlignCenter)
-        layout.addStretch()
+        btn_row.addWidget(btn_open)
+        btn_row.addWidget(btn_report)
+        btn_row.addWidget(btn_finish)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+    def _open_reports_folder(self):
+        root = self._get_local_root()
+        if root and os.path.isdir(root):
+            try:
+                os.startfile(root)
+            except Exception as e:
+                QMessageBox.warning(self, "Ошибка", f"Не удалось открыть папку:\n{e}")
+        else:
+            QMessageBox.information(self, "Папка не найдена", "Локальная папка отчётов не найдена.")
 
     def _show_final_report_dialog(self):
         root = self._get_local_root()
@@ -1309,6 +1395,8 @@ class MainWindow(QMainWindow):
         self._session_timer.start()
         self.lbl_session_points.setText(f"Пунктов: {len(manual_points)}")
         self._set_nav_status(0, "run")
+        self._begin_stage_metrics(getattr(self, "stage1_metrics", None))
+        self._apply_metrics(getattr(self, "stage1_metrics", None), total=len(manual_points))
         self._stage_results = {}
         self.btn_start_stage1.setEnabled(False)
         self.btn_start_stage1.setText("Выполняется...")
@@ -1340,6 +1428,12 @@ class MainWindow(QMainWindow):
         """Интегрированное обновление таблицы для 1 этапа."""
         self._stage_results[1] = report
         details = report.get("details", [])
+        # Метрики этапа 1
+        created = report.get("created", 0)
+        not_created = report.get("not_created", 0)
+        self._apply_metrics(getattr(self, "stage1_metrics", None),
+                            total=created + not_created, done=created,
+                            errors=not_created, skipped=0)
         if not details:
             return
             
@@ -1383,6 +1477,7 @@ class MainWindow(QMainWindow):
         self.btn_stop_stage1.setEnabled(False) # Выключаем СТОП
         self.btn_start_stage1.setText("Запустить создание структуры")
         self.btn_start_stage1.setEnabled(True)
+        self._active_metrics = None  # замораживаем время этапа
         self._set_nav_status(0, "done" if success else "error")
 
         if success:
@@ -1399,6 +1494,7 @@ class MainWindow(QMainWindow):
     def _start_stage2(self):
         local_root = self._get_local_root()
         self._set_nav_status(1, "run")
+        self._begin_stage_metrics(self.stub_pages[0].get("metrics"))
         p = self.stub_pages[0]
         btn, prog, act_list, stop, report_table = p["btn_run"], p["progress"], p["activity_list"], p["btn_stop"], p["report_table"]
         preview_table = p["preview_table"]
@@ -1472,6 +1568,8 @@ class MainWindow(QMainWindow):
         prog.setValue(0)
         report_table.hide()
         self._set_nav_status(2, "run")
+        self._begin_stage_metrics(p.get("metrics"))
+        self._apply_metrics(p.get("metrics"), total=len(entries))
 
         from workers.manual3_worker import Manual3Worker
         worker = Manual3Worker(entries, parent=self)
@@ -1512,6 +1610,11 @@ class MainWindow(QMainWindow):
                 table.setItem(row_idx, col_idx, item)
         table.show()
 
+        # Обновляем строку метрик этапа
+        done, errors, skipped = self._count_results(details)
+        self._apply_metrics(self.stub_pages[stage_idx - 2].get("metrics"),
+                            total=len(details), done=done, errors=errors, skipped=skipped)
+
     def _update_table_preview(self, data: list, stage_idx: int = 0):
         """Обновляет таблицу-превью (0 для этапа 2, 1 для этапа 3)."""
         p = self.stub_pages[stage_idx]
@@ -1536,6 +1639,7 @@ class MainWindow(QMainWindow):
     def _start_stage3(self):
         local_root = self._get_local_root()
         self._set_nav_status(3, "run")
+        self._begin_stage_metrics(self.stub_pages[2].get("metrics"))
         p = self.stub_pages[2] # Шаг 4: Запуск макросов
         btn, prog, act_list, stop, report_table = p["btn_run"], p["progress"], p["activity_list"], p["btn_stop"], p["report_table"]
         preview_table = p["preview_table"]
@@ -1565,6 +1669,7 @@ class MainWindow(QMainWindow):
     def _start_stage4(self):
         local_root = self._get_local_root()
         self._set_nav_status(4, "run")
+        self._begin_stage_metrics(self.stub_pages[3].get("metrics"))
         p = self.stub_pages[3] # Шаг 5: Создание отчета
         btn, prog, act_list, stop, report_table = p["btn_run"], p["progress"], p["activity_list"], p["btn_stop"], p["report_table"]
         
@@ -1587,6 +1692,7 @@ class MainWindow(QMainWindow):
     def _start_stage5(self):
         local_root = self._get_local_root()
         self._set_nav_status(5, "run")
+        self._begin_stage_metrics(self.stub_pages[4].get("metrics"))
         p = self.stub_pages[4] # Шаг 6: Вставка картинок
         btn, prog, act_list, stop, report_table = p["btn_run"], p["progress"], p["activity_list"], p["btn_stop"], p["report_table"]
         btn.setText("Выполняется...")
@@ -1608,6 +1714,7 @@ class MainWindow(QMainWindow):
     def _start_stage6(self):
         local_root = self._get_local_root()
         self._set_nav_status(6, "run")
+        self._begin_stage_metrics(self.stub_pages[5].get("metrics"))
         p = self.stub_pages[5] # Шаг 7: Вставка актов ГИ
         btn, prog, act_list, stop, report_table = p["btn_run"], p["progress"], p["activity_list"], p["btn_stop"], p["report_table"]
         btn.setText("Выполняется...")
@@ -1632,6 +1739,7 @@ class MainWindow(QMainWindow):
         stop.setEnabled(False)
         btn.setText(btn.property("original_text"))
         btn.setEnabled(True)
+        self._active_metrics = None  # замораживаем время этапа
         self._set_nav_status(step_idx, "done" if success else "error")
         if success:
             self._completed_stages.add(step_idx)
@@ -1714,6 +1822,7 @@ class MainWindow(QMainWindow):
 
             # Сбрасываем индикаторы «выполняется» в сайдбаре
             self._session_timer.stop()
+            self._active_metrics = None
             for idx, st in list(self._nav_status.items()):
                 if st == "run":
                     self._set_nav_status(idx, "idle")
@@ -1728,54 +1837,49 @@ class MainWindow(QMainWindow):
             self._is_stopping = False
 
     def _calculate_global_summary(self):
-        """Подсчитывает итоги по всем этапам."""
-        total_time = 0
-        if self._start_time:
-            total_time = int(time.time() - self._start_time)
-        
-        minutes = total_time // 60
-        seconds = total_time % 60
-        
-        success_count = 0
-        error_count = 0
-        errors_list = []
+        """Подсчитывает итоги по всем этапам и заполняет карточки статистики."""
+        total_time = int(time.time() - self._start_time) if self._start_time else 0
+        m, s = divmod(total_time, 60)
+        h, m = divmod(m, 60)
+        time_str = f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
-        # Считаем по 1 этапу
+        # Этап 1: обработано / не создано
         st1 = self._stage_results.get(1, {})
-        success_count += st1.get("created", 0)
-        error_count += st1.get("not_created", 0)
-        
-        # Считаем по остальным (там списки словарей)
+        success_count = st1.get("created", 0)
+
+        errors_list = []
         for stage_idx in [2, 4, 5, 6, 7]:
             results_val = self._stage_results.get(stage_idx)
             if not results_val or not isinstance(results_val, list):
                 continue
             for res in results_val:
                 res_str = str(res.get("Результат", "")).lower()
-                if "успешно" in res_str or "✅" in res_str:
-                    # Мы не плюсуем success_count здесь, так как пункты те же самые, 
-                    # успех на 5 этапе означает успех всей цепочки.
-                    pass
-                else:
-                    err_msg = f"Шаг {stage_idx}, п.{res.get('№ Пункта')}: {res.get('Результат')}"
-                    errors_list.append(err_msg)
+                if not ("успешно" in res_str or "✅" in res_str or "✔" in res_str
+                        or "пропущен" in res_str or "⚪" in res_str):
+                    errors_list.append(
+                        f"Шаг {stage_idx}, п.{res.get('№ Пункта')}: {res.get('Результат')}")
 
-        summary_text = (
-            f"⏱ <b>Время выполнения:</b> {minutes} мин. {seconds} сек.<br><br>"
-            f"✅ <b>Пунктов обработано:</b> {success_count}<br>"
-            f"❌ <b>Ошибок зафиксировано:</b> {len(errors_list)}<br><br>"
-        )
-        
+        # Пропущенные/некорректные пункты из статусов
+        skipped_count = 0
+        for pt in self._scan_points():
+            if pt["invalid"]:
+                errors_list.append(
+                    f"{pt['name']}: не корректный"
+                    + (f" (нет: {', '.join(pt['missing'])})" if pt["missing"] else ""))
+            elif pt["skipped"]:
+                skipped_count += 1
+
+        self.sum_done.setText(str(success_count))
+        self.sum_errors.setText(str(len(errors_list)))
+        self.sum_skipped.setText(str(skipped_count))
+        self.sum_time.setText(time_str)
+
+        self.summary_errors.clear()
         if errors_list:
-            summary_text += "<b>Детали ошибок:</b><br>"
-            for err in errors_list[:10]: # Ограничим вывод
-                summary_text += f"• {err}<br>"
-            if len(errors_list) > 10:
-                summary_text += f"<i>...и еще {len(errors_list)-10} ошибок.</i>"
+            for err in errors_list:
+                self.summary_errors.addItem(QListWidgetItem(f"❌ {err}"))
         else:
-            summary_text += "✨ Все этапы пройдены идеально!"
+            self.summary_errors.addItem(QListWidgetItem("✨ Все этапы пройдены без ошибок!"))
 
-        self.lbl_summary_stats.setText(summary_text)
-        
-        # Автоматически показываем диалог детального отчета
+        # Автоматически показываем диалог детального отчёта
         self._show_final_report_dialog()

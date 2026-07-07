@@ -32,8 +32,9 @@ Heavy modules (pandas, aiohttp, win32com, python-docx) are deliberately **not** 
 ### Key files
 | File | Purpose |
 |---|---|
-| `main_window.py` | All stage pages, sidebar navigation, log/activity-feed rendering, auto-mode stage chaining (Settings checkbox `chk_auto` → next stage starts automatically on `finished_ok`), and `_force_stop_active_stage` (emergency stop) |
-| `pages/settings_page.py` | Settings page — auto-mode checkbox, master-file path override, download speed toggle (🚀/🐢), update check & install buttons |
+| `main_window.py` | All stage pages, sidebar navigation (with per-step status glyphs ○/⏳/✅/❌ + session timer), unified page template (`_build_page_header` + `_build_metrics_bar`), the manual-control form (`_build_manual_page`), the Overview status-matrix page (`_setup_overview_page`/`_refresh_overview`), auto-mode stage chaining (Settings checkbox `chk_auto` → next stage starts automatically on `finished_ok`), and `_force_stop_active_stage` (emergency stop) |
+| `theme.py` | Light/dark theme system. `style.qss` is a token template (`@name@`); `build_stylesheet(theme)` substitutes a palette dict (`LIGHT`/`DARK`) into it. Theme choice persists in `QSettings("PNOS","PNOS")` key `theme`. Never hard-code colors in QSS — add a token to both palettes. |
+| `pages/settings_page.py` | Settings page — auto-mode checkbox, theme toggle (☀️/🌙, emits `theme_changed`), master-file path override, download speed toggle (🚀/🐢), update check & install buttons |
 | `report_dialog.py` | Detailed per-point result dialog shown after a stage finishes |
 | `config.py` | Single source of truth — Yandex Disk OAuth tokens, remote paths, folder names, macro paths |
 | `version.py` | `APP_VERSION` string — bump before every release |
@@ -59,7 +60,7 @@ Note the worker-number vs UI-stage-number offset: UI stage 3 is manual (no worke
 |---|---|---|
 | 1 – Создание структуры | `Stage1Worker` | Async parallel download from Yandex Disk. Finds point folders (`п.NNNN`), downloads `Паспорт`, `Первичка`, `Стар. ЭПБ` + optional folders, copies templates. Uses `asyncio.gather` for all points simultaneously. |
 | 2 – Копирование таблиц | `Stage2Worker` | Reads table #3 from `Акт замеров толщины стенки.docx` via `python-docx` (no COM for Word), writes it to `ПНОС_ТТП.xlsm` sheets `Импорт` and `Импорт (ПР)` via Excel COM. |
-| 3 – Ручной контроль | *(no worker)* | Manual user step; just marks itself done when the button is clicked. |
+| 3 – Ручной контроль | `Manual3Worker` (`workers/manual3_worker.py`) | On-screen **form** (no manual Excel needed). Left: per-point list with status (✅ filled / ⬜ empty / ⏭ skipped / 🚫 invalid). Right: fields written to the `паспорт` sheet — B14 purpose (prefilled `транспортировки `), B22 specialist (dropdown, `config.SPECIALISTS`), B33 date, B52 org (dropdown, `config.EPB_ORGS`), B51 auto да/нет from B52, B53 reg-num, B54 EPB date, B55 sheet count. Required: B14/B22/B33. Dates written as **text** (`NumberFormat="@"`) so Excel keeps the exact `ДД.ММ.ГГГГ`. Drafts persist in `.pnos_status.json` (`manual3_draft`); "Записать всё в Excel" validates required fields for every non-skipped/non-invalid point, then `Manual3Worker` writes each xlsm via COM and sets `manual3`. "Пропустить пункт" sets `skipped`; "Открыть в Excel" opens the xlsm. |
 | 4 – Запуск макросов | `Stage3Worker` | Reads Word passport DocVariables via Word COM, writes values to Excel `паспорт` sheet, runs `Restore` then `Save` VBA macros. Also reads column-A↔B mapping from master ПНОС file. Caches `паспорт!B12` (ГИ section number) into `.pnos_status.json` as `gi_number` for stage 7. |
 | 5 – Создание отчёта | `Stage4Worker` | Runs `TransTab` macro, creates `CleanSource.xlsx` from `Экспорт` sheet, does MailMerge in Word, fills table from `Спецификация трубопровода.docx`, recalculates residual-life tables, replaces ЛНК certificate number based on act date. Saves the report as `ЗЭПБ № ТТП-<F9>.<YY> - ттп № <B17>.docx` (F9/B17 read from the `паспорт` sheet, year suffix from `config.REPORT_NAME`; falls back to `Отчет_<num>.docx` if either cell is empty). Later stages locate the report via `find_report_file()` in `stage4_worker.py`, which matches both the new `ЗЭПБ…` name and the legacy `Отчет_*` (and prefers the non-`ПЕЧАТЬ` copy). |
 | 6 – Вставка картинок | `Stage5Worker` | Color-analyzes photos (red vs blue via Pillow), inserts rotated photos into `[ФОТО1]`/`[ФОТО2]` markers in the report, deletes empty/valve rows from the UT table, renumbers column 1, flags Г.3 table violations. |
@@ -84,7 +85,10 @@ The app is a **onefile** PyInstaller EXE, typically run directly from the Deskto
 Log: `%TEMP%\pnos_update.log`. Caveat: the updater code that runs is the one **already installed** on the user's machine — a fix to the swap logic only takes effect from the version that contains it onward (the *first* update to a new-logic version is still applied by the old code). In dev mode (not frozen) `apply_update_and_restart` just deletes the downloaded file and returns.
 
 ### Incremental execution
-Each point folder stores a hidden `.pnos_status.json`. `get_stage_status(folder, "stage1")` returns `True` if already done → worker skips the point. `set_stage_status(folder, "stageN", True)` writes and re-hides the file. Delete this file to reprocess a point.
+Each point folder stores a hidden `.pnos_status.json`. `get_stage_status(folder, "stage1")` returns `True` if already done → worker skips the point. `set_stage_status(folder, "stageN", True)` writes and re-hides the file (values may be any JSON type, not just bool — used for `gi_number`, `missing_folders`, `manual3_draft`). Delete this file to reprocess a point. Worker key ↔ UI step offset lives in `MainWindow.STEP_STATUS_KEYS` (used by the Overview matrix): step 3 = `manual3`, steps 4–7 = `stage3`–`stage6`.
+
+### Invalid / skipped points (stage 1 gate)
+Stage 1 checks each downloaded point for the required subfolders `config.REQUIRED_FOLDERS` (`Паспорт`, `Первичка` — `Стар. ЭПБ`/`Исполнительная`/`Акт отбраковки` are exempt). If any is missing, the folder is renamed to `п.NNNN (не корректный)` and `.pnos_status.json` gets `invalid: true` + `missing_folders`. `status_manager.is_point_blocked(folder)` returns `(True, reason)` for such folders (or user-`skipped` ones), and **every** worker (2–7) calls it at the top of its per-point loop to skip them. The Overview page and final summary surface these as problems.
 
 ### Configuration to update
 - `config.py → TOKEN_ITEMS` / `TOKEN_BASE` — Yandex Disk OAuth tokens
@@ -92,4 +96,6 @@ Each point folder stores a hidden `.pnos_status.json`. `get_stage_status(folder,
 - `config.py → MACRO_MASTER_WB_PATH` — absolute path to master ПНОС summary Excel file (or override in Settings UI)
 - `config.py → GI_CONFIG` — stage 7: `PASSPORT_CELL` (B12), `MARKER` (`[ГИ]`), `DISK_BASE` (`/ПНОС`, where `<number>/` act folders live)
 - `config.py → REPORT_NAME` — final report filename: `YEAR_SUFFIX` (e.g. `26` → `.26`, bump yearly like `DISK_PATHS_ITEMS`), `SHEET` (`паспорт`), `TTP_CELL` (F9), `POINT_CELL` (B17)
+- `config.py → REQUIRED_FOLDERS` / `INVALID_SUFFIX` — stage-1 validity gate (see "Invalid / skipped points")
+- `config.py → MANUAL_FORM` (cell map for step 3) / `SPECIALISTS` (B22 list) / `EPB_ORGS` (B52 list)
 - `version.py → APP_VERSION` — must be bumped before pushing a GitHub Release
