@@ -31,7 +31,7 @@ from PIL import Image, ImageOps
 from PySide6.QtCore import QThread, Signal
 
 from config import CONFIG
-from status_manager import get_stage_status, set_stage_status
+from status_manager import get_stage_status, set_stage_status, is_point_blocked
 from yandex_api import YandexDiskAPI
 from workers.stage3_worker import normalize_gi_number, find_file
 from workers.stage4_worker import WordDialogKiller, find_report_file
@@ -400,6 +400,10 @@ class Stage6Worker(QThread):
                 if self._is_cancelled:
                     break
                 p_name = os.path.basename(p_folder)
+                blocked, reason = is_point_blocked(p_folder)
+                if blocked:
+                    self.log.emit(f"\n── {p_name} ──\n   ⏭ Пропущен: {reason}")
+                    continue
                 pt_num = p_name[2:] if p_name.startswith("п.") else p_name
                 row = {"№ Пункта": pt_num, "Акты ГИ": "—", "Результат": "Ожидание"}
 

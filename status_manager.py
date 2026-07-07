@@ -49,10 +49,11 @@ def set_stage_status(point_folder, stage_key, status=True):
     """
     Сохраняет статус этапа в скрытый лог-файл (в формате JSON).
     Создает файл, если его нет, и автоматически его скрывает.
+    Значение может быть любым JSON-совместимым (bool, число, строка, список, словарь).
     """
     path = get_status_file_path(point_folder)
     data = {}
-    
+
     # Пытаемся прочитать существующие статусы
     if os.path.exists(path):
         try:
@@ -60,20 +61,61 @@ def set_stage_status(point_folder, stage_key, status=True):
                 data = json.load(f)
         except Exception:
             pass
-            
+
     # Обновляем нужный этап
     data[stage_key] = status
-    
+
     # Записываем обратно
     try:
         # Временно снимаем скрытонасть, чтобы Windows не блокировала перезапись файла на "только чтение" / "скрытый"
         unhide_file_windows(path)
-        
+
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
-        
+
         # Снова скрываем
         hide_file_windows(path)
     except Exception as e:
         print(f"Ошибка сохранения статуса для {point_folder}: {e}")
+
+
+def get_status_value(point_folder, key, default=None):
+    """Универсальный геттер произвольного значения из .pnos_status.json."""
+    path = get_status_file_path(point_folder)
+    if not os.path.exists(path):
+        return default
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get(key, default)
+    except Exception:
+        return default
+
+
+def is_point_blocked(point_folder):
+    """
+    Пункт заблокирован для обработки, если он помечен «не корректный» (нет
+    обязательных папок) или «пропущен» пользователем на шаге 3.
+    Возвращает (blocked: bool, reason: str).
+    """
+    name = os.path.basename(os.path.normpath(point_folder)).lower()
+    if "не корректн" in name:
+        return True, "не корректный (нет обязательных папок)"
+
+    path = get_status_file_path(point_folder)
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+        if data.get("invalid"):
+            miss = data.get("missing_folders") or []
+            reason = "не корректный"
+            if miss:
+                reason += f" (нет: {', '.join(miss)})"
+            return True, reason
+        if data.get("skipped"):
+            return True, "пропущен пользователем"
+    return False, ""
 

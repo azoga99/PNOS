@@ -315,6 +315,459 @@ class MainWindow(QMainWindow):
         if self.overview_problems.count() == 0:
             self.overview_problems.addItem(QListWidgetItem("✨ Проблемных пунктов нет"))
 
+    # ─── Шаг 3: форма ручного контроля ─────────────────────────────
+    def _make_date_edit(self):
+        """Поле даты с календарём; пустое состояние = минимальная дата-заглушка."""
+        from PySide6.QtWidgets import QDateEdit
+        from PySide6.QtCore import QDate
+        de = QDateEdit()
+        de.setCalendarPopup(True)
+        de.setDisplayFormat("dd.MM.yyyy")
+        de.setMinimumDate(QDate(1900, 1, 1))
+        de.setSpecialValueText("— не выбрана —")
+        de.setDate(QDate(1900, 1, 1))
+        return de
+
+    def _date_edit_value(self, de) -> str:
+        """Строка ДД.ММ.ГГГГ или '' если дата не выбрана."""
+        from PySide6.QtCore import QDate
+        if de.date() == QDate(1900, 1, 1):
+            return ""
+        return de.date().toString("dd.MM.yyyy")
+
+    def _set_date_edit(self, de, value: str):
+        from PySide6.QtCore import QDate
+        s = (value or "").strip()
+        d = QDate.fromString(s, "dd.MM.yyyy") if s else QDate()
+        de.setDate(d if d.isValid() else QDate(1900, 1, 1))
+
+    def _form_field(self, label_text: str, widget, required: bool = False, note: str = ""):
+        """Собирает блок формы: подпись (со звёздочкой, если обязательно) + поле + подсказка."""
+        block = QWidget()
+        v = QVBoxLayout(block)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(4)
+
+        head = QHBoxLayout()
+        head.setSpacing(4)
+        lbl = QLabel(label_text)
+        lbl.setObjectName("form_field_label")
+        head.addWidget(lbl)
+        if required:
+            star = QLabel("*")
+            star.setObjectName("form_field_req")
+            head.addWidget(star)
+        head.addStretch()
+        v.addLayout(head)
+        v.addWidget(widget)
+
+        if note:
+            n = QLabel(note)
+            n.setObjectName("field_note")
+            n.setWordWrap(True)
+            v.addWidget(n)
+        return block
+
+    def _build_manual_page(self):
+        """Строит страницу шага 3 (форма) и подменяет ею типовую страницу в стеке."""
+        from PySide6.QtWidgets import QComboBox, QLineEdit
+        from PySide6.QtGui import QIntValidator
+
+        self.manual_drafts = {}          # folder -> values dict (черновики в памяти)
+        self.manual_current = None       # текущая выбранная папка пункта
+        self._manual_loading = False     # защита от рекурсии при подстановке значений
+
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(2, 2, 6, 2)
+        outer.setSpacing(12)
+
+        outer.addWidget(self._build_page_header(
+            "✍️", "Шаг 3: Ручной контроль",
+            "Заполните данные паспорта для каждого пункта. По кнопке «Записать всё в Excel» "
+            "значения будут внесены на лист «паспорт» автоматически — открывать Excel вручную не нужно."
+        ))
+
+        metrics_bar, metric_labels = self._build_metrics_bar()
+        outer.addWidget(metrics_bar)
+
+        # ── Основная область: слева список пунктов, справа форма ──
+        split = QHBoxLayout()
+        split.setSpacing(12)
+
+        left = QVBoxLayout()
+        left.setSpacing(6)
+        lbl_pts = QLabel("Пункты")
+        lbl_pts.setObjectName("section_label")
+        left.addWidget(lbl_pts)
+        self.manual_point_list = QListWidget()
+        self.manual_point_list.setObjectName("point_list")
+        self.manual_point_list.setMinimumWidth(240)
+        self.manual_point_list.setMaximumWidth(300)
+        self.manual_point_list.currentItemChanged.connect(self._on_manual_point_selected)
+        left.addWidget(self.manual_point_list, 1)
+        lbl_legend = QLabel("✅ заполнен · ⬜ не заполнен · ⏭ пропущен · 🚫 не корректный")
+        lbl_legend.setObjectName("field_note")
+        lbl_legend.setWordWrap(True)
+        left.addWidget(lbl_legend)
+        split.addLayout(left)
+
+        # Правая часть — форма в скролле
+        form_scroll = QScrollArea()
+        form_scroll.setWidgetResizable(True)
+        form_scroll.setFrameShape(QFrame.NoFrame)
+        form_card = QFrame()
+        form_card.setObjectName("form_card")
+        form = QVBoxLayout(form_card)
+        form.setContentsMargins(20, 18, 20, 18)
+        form.setSpacing(14)
+
+        self.manual_form_title = QLabel("Выберите пункт слева")
+        self.manual_form_title.setObjectName("form_title")
+        form.addWidget(self.manual_form_title)
+
+        f = {}
+        f["purpose"] = QLineEdit()
+        f["purpose"].setPlaceholderText("транспортировки …")
+        form.addWidget(self._form_field(
+            "Предназначение трубопровода (B14)", f["purpose"], required=True,
+            note="Начните с «транспортировки», далее — конкретное вещество "
+                 "(напр. «транспортировки рафината растворителя»)."))
+
+        f["specialist"] = QComboBox()
+        f["specialist"].addItem("— выберите —", "")
+        for name in CONFIG.get("SPECIALISTS", []):
+            f["specialist"].addItem(name, name)
+        form.addWidget(self._form_field("Специалист (B22)", f["specialist"], required=True))
+
+        f["date"] = self._make_date_edit()
+        form.addWidget(self._form_field("Дата (B33)", f["date"], required=True,
+                                        note="Формат ДД.ММ.ГГГГ, выбор через календарь."))
+
+        # ── Данные предыдущей ЭПБ ──
+        sep = QLabel("Данные предыдущей ЭПБ")
+        sep.setObjectName("section_label")
+        form.addWidget(sep)
+
+        f["org"] = QComboBox()
+        f["org"].addItem("— не выбрано —", "")
+        for org in CONFIG.get("EPB_ORGS", []):
+            f["org"].addItem(org, org)
+        f["org"].currentIndexChanged.connect(self._update_epb_done_label)
+        form.addWidget(self._form_field(
+            "Организация (B52)", f["org"], required=False,
+            note="Необязательно. Если экспертиза ранее не проводилась — оставьте пустым."))
+
+        self.manual_epb_done = QLabel("Проводилась ранее (B51): нет")
+        self.manual_epb_done.setObjectName("field_note")
+        form.addWidget(self.manual_epb_done)
+
+        f["reg_num"] = QLineEdit()
+        f["reg_num"].setPlaceholderText("Рег. номер Ростехнадзора или внутренний")
+        form.addWidget(self._form_field("Регистрационный номер (B53)", f["reg_num"], required=False))
+
+        # Дата предыдущей ЭПБ + кнопка очистки
+        epb_date_row = QWidget()
+        edr = QHBoxLayout(epb_date_row)
+        edr.setContentsMargins(0, 0, 0, 0)
+        edr.setSpacing(6)
+        f["epb_date"] = self._make_date_edit()
+        edr.addWidget(f["epb_date"], 1)
+        btn_clr = QPushButton("Очистить")
+        btn_clr.setObjectName("ghost_button")
+        btn_clr.setCursor(Qt.PointingHandCursor)
+        btn_clr.clicked.connect(lambda: self._set_date_edit(f["epb_date"], ""))
+        edr.addWidget(btn_clr)
+        form.addWidget(self._form_field("Дата предыдущей ЭПБ (B54)", epb_date_row, required=False))
+
+        f["sheets"] = QLineEdit()
+        f["sheets"].setValidator(QIntValidator(0, 100000, self))
+        f["sheets"].setPlaceholderText("Число листов заключения")
+        form.addWidget(self._form_field(
+            "Количество листов (B55)", f["sheets"], required=False,
+            note="Лист уведомления Ростехнадзора не учитывается."))
+
+        form.addStretch()
+        self.manual_fields = f
+        form_scroll.setWidget(form_card)
+        split.addWidget(form_scroll, 1)
+
+        outer.addLayout(split, 1)
+
+        # ── Кнопки действий ──
+        btn_row = QHBoxLayout()
+        btn_write = QPushButton("💾 Записать всё в Excel")
+        btn_write.setObjectName("card_button")
+        btn_write.setProperty("original_text", btn_write.text())
+        btn_write.setMinimumWidth(220)
+        btn_write.setCursor(Qt.PointingHandCursor)
+        btn_write.clicked.connect(self._start_manual_stage3)
+
+        btn_skip = QPushButton("⏭ Пропустить пункт")
+        btn_skip.setObjectName("ghost_button")
+        btn_skip.setCursor(Qt.PointingHandCursor)
+        btn_skip.clicked.connect(self._skip_current_point)
+
+        btn_excel = QPushButton("📂 Открыть в Excel")
+        btn_excel.setObjectName("ghost_button")
+        btn_excel.setCursor(Qt.PointingHandCursor)
+        btn_excel.clicked.connect(self._open_current_in_excel)
+
+        btn_stop = QPushButton("⏹ Остановить")
+        btn_stop.setObjectName("stop_button")
+        btn_stop.setMinimumWidth(130)
+        btn_stop.setCursor(Qt.PointingHandCursor)
+        btn_stop.setEnabled(False)
+        btn_stop.clicked.connect(self._force_stop_active_stage)
+
+        btn_row.addWidget(btn_write)
+        btn_row.addWidget(btn_skip)
+        btn_row.addWidget(btn_excel)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_stop)
+        outer.addLayout(btn_row)
+
+        progress = QProgressBar()
+        progress.setValue(0)
+        progress.setFixedHeight(10)
+        progress.setTextVisible(False)
+        outer.addWidget(progress)
+
+        lbl_act = QLabel("История действий")
+        lbl_act.setObjectName("section_label")
+        outer.addWidget(lbl_act)
+        act_list = QListWidget()
+        act_list.setObjectName("activity_feed")
+        act_list.setMinimumHeight(90)
+        outer.addWidget(act_list)
+
+        report_table = QTableWidget()
+        report_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        report_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        report_table.setAlternatingRowColors(True)
+        report_table.setMinimumHeight(140)
+        report_table.hide()
+        outer.addWidget(report_table)
+
+        # Подменяем типовую страницу шага 3 (стек-индекс 2) на форму
+        old = self.pages_stack.widget(2)
+        self.pages_stack.insertWidget(2, page)
+        self.pages_stack.removeWidget(old)
+        old.deleteLater()
+
+        # Обновляем ссылки в stub_pages[1], чтобы работали общие механизмы
+        self.stub_pages[1].update({
+            "page": page,
+            "btn_run": btn_write,
+            "btn_stop": btn_stop,
+            "btn_skip": btn_skip,
+            "btn_excel": btn_excel,
+            "progress": progress,
+            "activity_list": act_list,
+            "preview_table": None,
+            "report_table": report_table,
+            "metrics": metric_labels,
+        })
+
+    def _load_manual_points(self):
+        """Заполняет список пунктов на форме ручного контроля."""
+        from PySide6.QtCore import Qt as _Qt
+        points = self._scan_points()
+        self.manual_point_list.blockSignals(True)
+        self.manual_point_list.clear()
+        for pt in points:
+            folder = os.path.join(self._get_local_root(), pt["name"])
+            glyph, _ = self._manual_point_state(folder, pt)
+            item = QListWidgetItem(f"{glyph}  {pt['name']}")
+            item.setData(_Qt.UserRole, folder)
+            if pt["invalid"]:
+                item.setFlags(item.flags() & ~_Qt.ItemIsEnabled)
+            self.manual_point_list.addItem(item)
+        self.manual_point_list.blockSignals(False)
+
+        self._update_manual_metrics(points)
+
+        # Выбираем первый доступный незаполненный пункт (или просто первый доступный)
+        target = None
+        for i in range(self.manual_point_list.count()):
+            it = self.manual_point_list.item(i)
+            if it.flags() & _Qt.ItemIsEnabled:
+                if target is None:
+                    target = i
+                if it.text().startswith("⬜"):
+                    target = i
+                    break
+        if target is not None:
+            self.manual_point_list.setCurrentRow(target)
+        else:
+            self.manual_current = None
+            self._clear_manual_form()
+
+    def _manual_point_state(self, folder, pt):
+        """Возвращает (глиф, состояние) пункта для списка формы."""
+        if pt["invalid"]:
+            return "🚫", "invalid"
+        from status_manager import get_status_value
+        if pt.get("skipped") or get_status_value(folder, "skipped", False):
+            return "⏭", "skipped"
+        # Заполнен, если этап manual3 записан или есть полный черновик
+        if folder in self.manual_drafts:
+            values = self.manual_drafts[folder]
+        else:
+            values = get_status_value(folder, "manual3_draft", None)
+        if get_status_value(folder, "manual3", False):
+            return "✅", "done"
+        if values and self._required_ok(values):
+            return "✅", "filled"
+        return "⬜", "empty"
+
+    def _required_ok(self, values: dict) -> bool:
+        """Проверяет заполненность обязательных полей (B14, B22, B33)."""
+        purpose = (values.get("purpose") or "").strip()
+        specialist = (values.get("specialist") or "").strip()
+        date = (values.get("date") or "").strip()
+        return bool(purpose) and bool(specialist) and bool(date)
+
+    def _on_manual_point_selected(self, current, previous):
+        """Сохраняет черновик прошлого пункта и загружает выбранный."""
+        if self._manual_loading:
+            return
+        from PySide6.QtCore import Qt as _Qt
+        # Сохраняем черновик предыдущего
+        if self.manual_current is not None:
+            self._save_current_draft()
+        if current is None:
+            self.manual_current = None
+            self._clear_manual_form()
+            return
+        folder = current.data(_Qt.UserRole)
+        self.manual_current = folder
+        self._load_form_for(folder)
+
+    def _load_form_for(self, folder):
+        """Загружает значения пункта в форму (из черновика или из status/Excel)."""
+        from status_manager import get_status_value
+        self._manual_loading = True
+        try:
+            self.manual_form_title.setText(f"Пункт {os.path.basename(folder)}")
+            if folder in self.manual_drafts:
+                values = self.manual_drafts[folder]
+            else:
+                values = get_status_value(folder, "manual3_draft", None) or {}
+            prefix = CONFIG["MANUAL_FORM"].get("PURPOSE_PREFIX", "транспортировки ")
+            f = self.manual_fields
+            f["purpose"].setText(values.get("purpose") or prefix)
+            self._set_combo(f["specialist"], values.get("specialist", ""))
+            self._set_date_edit(f["date"], values.get("date", ""))
+            self._set_combo(f["org"], values.get("epb_org", ""))
+            f["reg_num"].setText(values.get("reg_num", ""))
+            self._set_date_edit(f["epb_date"], values.get("epb_date", ""))
+            f["sheets"].setText(str(values.get("sheets", "") or ""))
+            self._update_epb_done_label()
+        finally:
+            self._manual_loading = False
+
+    def _clear_manual_form(self):
+        self._manual_loading = True
+        try:
+            self.manual_form_title.setText("Выберите пункт слева")
+            f = self.manual_fields
+            prefix = CONFIG["MANUAL_FORM"].get("PURPOSE_PREFIX", "транспортировки ")
+            f["purpose"].setText(prefix)
+            f["specialist"].setCurrentIndex(0)
+            self._set_date_edit(f["date"], "")
+            f["org"].setCurrentIndex(0)
+            f["reg_num"].setText("")
+            self._set_date_edit(f["epb_date"], "")
+            f["sheets"].setText("")
+            self._update_epb_done_label()
+        finally:
+            self._manual_loading = False
+
+    def _set_combo(self, combo, value: str):
+        idx = combo.findData(value)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+
+    def _collect_form_values(self) -> dict:
+        f = self.manual_fields
+        return {
+            "purpose": f["purpose"].text().strip(),
+            "specialist": f["specialist"].currentData() or "",
+            "date": self._date_edit_value(f["date"]),
+            "epb_org": f["org"].currentData() or "",
+            "reg_num": f["reg_num"].text().strip(),
+            "epb_date": self._date_edit_value(f["epb_date"]),
+            "sheets": f["sheets"].text().strip(),
+        }
+
+    def _save_current_draft(self):
+        """Сохраняет текущие значения формы в память и в .pnos_status.json."""
+        if not self.manual_current:
+            return
+        values = self._collect_form_values()
+        self.manual_drafts[self.manual_current] = values
+        try:
+            from status_manager import set_stage_status
+            set_stage_status(self.manual_current, "manual3_draft", values)
+        except Exception:
+            pass
+
+    def _update_epb_done_label(self, *args):
+        org = self.manual_fields["org"].currentData() or ""
+        self.manual_epb_done.setText(
+            f"Проводилась ранее (B51): {'да' if org.strip() else 'нет'}")
+        # Подсветка B52 жёлтым, если пусто (внимание, но не ошибка)
+        combo = self.manual_fields["org"]
+        combo.setProperty("attention", not bool(org.strip()))
+        combo.style().unpolish(combo)
+        combo.style().polish(combo)
+
+    def _skip_current_point(self):
+        """Помечает текущий пункт как пропущенный (дальше не обрабатывается)."""
+        if not self.manual_current:
+            return
+        from status_manager import set_stage_status
+        folder = self.manual_current
+        set_stage_status(folder, "skipped", True)
+        set_stage_status(folder, "manual3", False)
+        self.manual_drafts.pop(folder, None)
+        self.manual_current = None  # чтобы не пересохранить черновик при перезагрузке списка
+        self._add_activity(2, f"{os.path.basename(folder)} — пропущен", "warn")
+        self._load_manual_points()
+
+    def _open_current_in_excel(self):
+        """Открывает ПНОС_ТТП.xlsm текущего пункта во внешнем Excel."""
+        if not self.manual_current:
+            return
+        from workers.stage2_worker import find_file_exact_ext
+        path = find_file_exact_ext(self.manual_current, (".xls", ".xlsx", ".xlsm"))
+        if path and os.path.exists(path):
+            try:
+                os.startfile(path)
+            except Exception as e:
+                QMessageBox.warning(self, "Ошибка", f"Не удалось открыть файл:\n{e}")
+        else:
+            QMessageBox.information(self, "Файл не найден",
+                                    "ПНОС_ТТП.xlsm в папке пункта не найден.")
+
+    def _update_manual_metrics(self, points):
+        m = self.stub_pages[1].get("metrics")
+        if not m:
+            return
+        total = len(points)
+        filled = skipped = 0
+        for pt in points:
+            folder = os.path.join(self._get_local_root(), pt["name"])
+            glyph, state = self._manual_point_state(folder, pt)
+            if state in ("done", "filled"):
+                filled += 1
+            elif state == "skipped":
+                skipped += 1
+        m["total"].setText(str(total))
+        m["done"].setText(str(filled))
+        m["skipped"].setText(str(skipped))
+        m["errors"].setText("0")
+
     def _setup_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
@@ -589,6 +1042,9 @@ class MainWindow(QMainWindow):
             })
             self.pages_stack.addWidget(page)
 
+        # Шаг 3 — заменяем типовую страницу на форму ручного контроля
+        self._build_manual_page()
+
         # ─── СТРАНИЦА: ГЛОБАЛЬНЫЙ ОТЧЕТ ───────────────────────────
         self.page_summary = QWidget()
         self._setup_summary_page()
@@ -620,6 +1076,8 @@ class MainWindow(QMainWindow):
         self.btn_overview.setChecked(index == self.PAGE_OVERVIEW)
         if index == self.PAGE_OVERVIEW:
             self._refresh_overview()
+        elif index == 2:  # страница шага 3 (ручной контроль)
+            self._load_manual_points()
 
     def _setup_page1(self):
         """Создает UI для первого этапа (Настройки и парсинг)."""
@@ -967,19 +1425,69 @@ class MainWindow(QMainWindow):
         self._workers["stage2"] = worker
 
     def _start_manual_stage3(self):
-        """Шаг 3: Ручной контроль (без воркера)."""
+        """Шаг 3: валидация формы всех пунктов и запись данных в Excel."""
+        from status_manager import get_status_value
+
+        # Сохраняем черновик текущего пункта
+        self._save_current_draft()
+
+        points = self._scan_points()
+        entries = []          # пункты для записи в Excel
+        not_ready = []        # пункты с незаполненными обязательными полями
+        root = self._get_local_root()
+
+        for pt in points:
+            if pt["invalid"]:
+                continue
+            folder = os.path.join(root, pt["name"])
+            if pt.get("skipped") or get_status_value(folder, "skipped", False):
+                continue
+            values = self.manual_drafts.get(folder) or get_status_value(folder, "manual3_draft", None)
+            if not values or not self._required_ok(values):
+                not_ready.append(pt["name"])
+                continue
+            entries.append({"folder": folder, "num": pt["name"].replace("п.", ""), "values": values})
+
+        if not_ready:
+            QMessageBox.warning(
+                self, "Заполнены не все пункты",
+                "Не заполнены обязательные поля (Предназначение, Специалист, Дата) "
+                "у пунктов:\n\n" + ", ".join(not_ready) +
+                "\n\nЗаполните их или нажмите «Пропустить пункт».")
+            self._add_activity(2, f"Не заполнены пункты: {', '.join(not_ready)}", "warn")
+            return
+
+        if not entries:
+            QMessageBox.information(
+                self, "Нет данных для записи",
+                "Нет заполненных пунктов для записи. Заполните хотя бы один пункт "
+                "или пропустите все.")
+            return
+
         p = self.stub_pages[1]
-        btn, stop = p["btn_run"], p["btn_stop"]
-        
-        btn.setText("Выполнено (Продолжить)")
-        btn.setEnabled(True)
-        stop.setEnabled(False)
-        
-        # На этом этапе просто ждем нажатия на кнопку "Запустить", 
-        # которая для этого этапа переименована в подтверждение.
-        # Но привязка в _setup_ui уже есть к этому методу.
-        # Чтобы кнопка сработала как "финиш" этапа:
-        self._on_stub_finished(2, True)
+        btn, stop, prog, report_table = p["btn_run"], p["btn_stop"], p["progress"], p["report_table"]
+        btn.setText("Запись...")
+        btn.setEnabled(False)
+        stop.setEnabled(True)
+        prog.setValue(0)
+        report_table.hide()
+        self._set_nav_status(2, "run")
+
+        from workers.manual3_worker import Manual3Worker
+        worker = Manual3Worker(entries, parent=self)
+        worker.log.connect(self._append_log)
+        worker.info.connect(lambda msg, cat: self._add_activity(2, msg, cat))
+        worker.progress.connect(prog.setValue)
+        worker.report_ready.connect(
+            lambda d: self._show_integrated_report(3, ["№ Пункта", "Записано", "Результат"], d))
+        worker.finished_ok.connect(self._on_manual_written)
+        worker.start()
+        self._workers["manual3"] = worker
+
+    def _on_manual_written(self, success: bool):
+        """Завершение записи данных ручного контроля."""
+        self._load_manual_points()
+        self._on_stub_finished(2, success)
 
     def _show_integrated_report(self, stage_idx: int, columns: list, details: list):
         """Отображает отчет прямо в интерфейсе шага. stage_idx: 2-6"""

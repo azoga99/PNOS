@@ -22,7 +22,7 @@ import win32gui
 import win32con
 
 from config import CONFIG
-from status_manager import get_stage_status, set_stage_status
+from status_manager import get_stage_status, set_stage_status, is_point_blocked
 
 def safe_close_com(obj, save=False):
     """Безопасное закрытие COM-объекта (книги или документа)."""
@@ -618,6 +618,10 @@ class Stage4Worker(QThread):
                     break
 
                 p_name = os.path.basename(p_folder)
+                blocked, reason = is_point_blocked(p_folder)
+                if blocked:
+                    self.log.emit(f"\n── {p_name} ──\n   ⏭ Пропущен: {reason}")
+                    continue
                 self.info.emit(f"Генерация отчета {p_name}...", "wait")
                 self.log.emit(f"\n── {p_name} ──")
                 pt_num_str = p_name[2:] if p_name.startswith("п.") else p_name

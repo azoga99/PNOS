@@ -262,6 +262,18 @@ class Stage1Worker(QThread):
                     if self._is_cancelled:
                         return None
                     p_num = point["number"]
+
+                    # Уже помечен НЕ КОРРЕКТНЫМ на прошлом прогоне — не качаем повторно
+                    suffix = CONFIG.get("INVALID_SUFFIX", " (не корректный)")
+                    invalid_folder = os.path.join(self.local_root, f"п.{p_num}{suffix}")
+                    if os.path.isdir(invalid_folder) and get_stage_status(invalid_folder, "invalid"):
+                        self.log.emit(f"── Пункт п.{p_num} ──")
+                        self.log.emit(f"   🚫 Ранее помечен НЕ КОРРЕКТНЫМ, пропускаем.")
+                        completed_dl += 1
+                        pct = 40 + int(completed_dl / len(valid_points) * 55)
+                        self.progress.emit(min(pct, 95))
+                        return p_num
+
                     local_folder = os.path.join(self.local_root, f"п.{p_num}")
                     os.makedirs(local_folder, exist_ok=True)
 
@@ -311,6 +323,35 @@ class Stage1Worker(QThread):
                             self.log.emit(f"   п.{p_num} 📄 {tpl_name} скопирован")
 
                     set_stage_status(local_folder, "stage1", True)
+
+                    # ── Проверка корректности: без обязательных папок пункт
+                    #    дальше не обрабатывается (переименовываем в «не корректный»)
+                    required = CONFIG.get("REQUIRED_FOLDERS", ["Паспорт", "Первичка"])
+                    missing_req = []
+                    for r in required:
+                        sub = os.path.join(local_folder, r)
+                        if not (os.path.isdir(sub) and os.listdir(sub)):
+                            missing_req.append(r)
+
+                    if missing_req:
+                        set_stage_status(local_folder, "invalid", True)
+                        set_stage_status(local_folder, "missing_folders", missing_req)
+                        suffix = CONFIG.get("INVALID_SUFFIX", " (не корректный)")
+                        invalid_folder = os.path.join(self.local_root, f"п.{p_num}{suffix}")
+                        try:
+                            if os.path.abspath(local_folder) != os.path.abspath(invalid_folder):
+                                if os.path.isdir(invalid_folder):
+                                    shutil.rmtree(invalid_folder, ignore_errors=True)
+                                os.rename(local_folder, invalid_folder)
+                            local_folder = invalid_folder
+                        except Exception as e:
+                            self.log.emit(f"   ⚠ Не удалось переименовать папку п.{p_num}: {e}")
+                        self.info.emit(
+                            f"п.{p_num}: не будет обработан — нет папок: {', '.join(missing_req)}", "warn")
+                        self.log.emit(
+                            f"   🚫 п.{p_num} помечен НЕ КОРРЕКТНЫМ — отсутствуют: {', '.join(missing_req)}")
+                    else:
+                        set_stage_status(local_folder, "invalid", False)
 
                     completed_dl += 1
                     pct = 40 + int(completed_dl / len(valid_points) * 55)

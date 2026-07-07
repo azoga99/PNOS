@@ -22,7 +22,7 @@ import docx
 # Импорт конфигурации и утилит из Этапа 3
 from config import CONFIG
 from workers.stage3_worker import DialogKiller, safe_close_com
-from status_manager import get_stage_status, set_stage_status
+from status_manager import get_stage_status, set_stage_status, is_point_blocked
 
 
 def find_folder_fuzzy(base: str, target: str, cutoff: float = 0.7) -> str | None:
@@ -156,6 +156,10 @@ class Stage2Worker(QThread):
                     break
 
                 p_name = os.path.basename(p_folder)
+                blocked, reason = is_point_blocked(p_folder)
+                if blocked:
+                    self.log.emit(f"\n── {p_name} ──\n   ⏭ Пропущен: {reason}")
+                    continue
                 pt_num = p_name.replace("п.", "")
                 self.log.emit(f"\n── {p_name} ──")
                 self.info.emit(f"Обработка п.{pt_num}...", "wait")

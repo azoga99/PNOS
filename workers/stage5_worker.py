@@ -6,7 +6,7 @@ import tempfile
 import re
 from PIL import Image
 from PySide6.QtCore import QThread, Signal
-from status_manager import get_stage_status, set_stage_status
+from status_manager import get_stage_status, set_stage_status, is_point_blocked
 from workers.stage4_worker import find_report_file
 
 def is_cell_red(cell):
@@ -106,8 +106,12 @@ class Stage5Worker(QThread):
                 if self._is_cancelled: break
                 
                 p_name = os.path.basename(p_folder)
+                blocked, reason = is_point_blocked(p_folder)
+                if blocked:
+                    self.log.emit(f"\n── {p_name} ──\n   ⏭ Пропущен: {reason}")
+                    continue
                 pt_num = p_name[2:] if p_name.startswith("п.") else p_name
-                
+
                 # --- Проверка статуса (Инкрементальная логика) ---
                 if get_stage_status(p_folder, "stage5"):
                     self.log.emit(f"\n── {p_name} ──")

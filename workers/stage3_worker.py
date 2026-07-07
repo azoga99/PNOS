@@ -23,7 +23,7 @@ import win32gui
 import win32con
 
 from config import CONFIG
-from status_manager import get_stage_status, set_stage_status
+from status_manager import get_stage_status, set_stage_status, is_point_blocked
 
 
 # =====================================================================
@@ -302,8 +302,12 @@ class Stage3Worker(QThread):
                     self.log.emit("\n❌ Выполнение отменено пользователем!")
                     break
                 p_name = os.path.basename(p_folder)
+                blocked, reason = is_point_blocked(p_folder)
+                if blocked:
+                    self.log.emit(f"\n── {p_name} ──\n   ⏭ Пропущен: {reason}")
+                    continue
                 p_number_str = p_name[2:] if p_name.startswith("п.") else p_name
-                
+
                 # --- Проверка статуса (Инкрементальная логика) ---
                 if get_stage_status(p_folder, "stage3"):
                     self.log.emit(f"\n── {p_name} ──")
