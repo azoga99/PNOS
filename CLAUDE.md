@@ -24,7 +24,12 @@ No test suite exists. Manual testing requires running the full GUI. Windows-only
 ## Architecture
 
 ### Entry flow
-`main.py` → `MainWindow` (`main_window.py`, PySide6 QMainWindow) → `QStackedWidget` with pages for each step → `workers/stage*_worker.py` (QThreads).
+`main.py` (shows `SplashLoader` — program icon with a spinning arc — while the window builds) → `MainWindow` (`main_window.py`, PySide6 QMainWindow) → `QStackedWidget` with 5 pages: **Процесс** (pipeline of 7 `StepCard`s + launch params + single log), **Ручной контроль** (step-3 form), **Обзор** (status matrix), **Итоговый отчёт** (per-step result tables built from `_stage_results`), **Настройки**. Workers live in `workers/stage*_worker.py` (QThreads).
+
+### Design rules
+- Strict business look: **no emojis** in UI text (the only exception is 📂 on folder/file pickers), no gradients; colors only via QSS tokens.
+- Statuses are shown with colored dots (`widgets.dot_icon`) and `StepCard` badges (`STATUS_COLORS`: idle/run/done/error/wait), not glyph emojis.
+- Per-step result tables/metrics bars were deliberately removed from step UI — results go to the Обзор matrix and the Итоговый отчёт page only; each step card shows a one-line summary.
 
 ### Startup performance — lazy imports (do not break)
 Heavy modules (pandas, aiohttp, win32com, python-docx) are deliberately **not** imported at module top level in `main.py` / `main_window.py`. Workers and `report_dialog` are imported lazily inside the stage-launch methods, and `main()` prewarms them in a background daemon thread after the window is shown (`_prewarm_heavy_imports`). Adding a top-level import of a worker or heavy library to these files silently reverts the fast-startup optimization.
@@ -32,10 +37,10 @@ Heavy modules (pandas, aiohttp, win32com, python-docx) are deliberately **not** 
 ### Key files
 | File | Purpose |
 |---|---|
-| `main_window.py` | All stage pages, sidebar navigation (with per-step status glyphs ○/⏳/✅/❌ + session timer), unified page template (`_build_page_header` + `_build_metrics_bar`), the manual-control form (`_build_manual_page`), the Overview status-matrix page (`_setup_overview_page`/`_refresh_overview`), auto-mode stage chaining (Settings checkbox `chk_auto` → next stage starts automatically on `finished_ok`), and `_force_stop_active_stage` (emergency stop) |
+| `main_window.py` | All pages: the Процесс pipeline (`_setup_process_page`, step cards wired to `_start_stage*`), manual-control form (`_setup_manual_page`), Обзор matrix (`_setup_overview_page`/`_refresh_overview`), Итоговый отчёт (`_setup_report_page`/`_refresh_report_page`), single activity log (`_add_activity`), auto-mode chaining in `_on_step_finished` (Settings checkbox `chk_auto`; stops at manual step 3 with a "wait" card), and `_force_stop_active_stage` (emergency stop) |
+| `widgets.py` | `StepCard` (pipeline card: status badge, summary line, action/stop buttons, thin progress bar, hover shadow animation) and `dot_icon(color)` (colored-dot QIcon used instead of emojis in lists) |
 | `theme.py` | Light/dark theme system. `style.qss` is a token template (`@name@`); `build_stylesheet(theme)` substitutes a palette dict (`LIGHT`/`DARK`) into it. Theme choice persists in `QSettings("PNOS","PNOS")` key `theme`. Never hard-code colors in QSS — add a token to both palettes. |
-| `pages/settings_page.py` | Settings page — auto-mode checkbox, theme toggle (☀️/🌙, emits `theme_changed`), master-file path override, download speed toggle (🚀/🐢), update check & install buttons |
-| `report_dialog.py` | Detailed per-point result dialog shown after a stage finishes |
+| `pages/settings_page.py` | Settings page — auto-mode checkbox, theme toggle (emits `theme_changed`), master-file path override, download speed toggle, update check & install buttons |
 | `config.py` | Single source of truth — Yandex Disk OAuth tokens, remote paths, folder names, macro paths |
 | `version.py` | `APP_VERSION` string — bump before every release |
 | `status_manager.py` | Per-point incremental tracking via hidden `.pnos_status.json` in each point folder |
