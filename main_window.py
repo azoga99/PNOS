@@ -49,9 +49,8 @@ class MainWindow(QMainWindow):
     # Индексы страниц в QStackedWidget
     PAGE_PROCESS = 0
     PAGE_MANUAL = 1
-    PAGE_OVERVIEW = 2
-    PAGE_REPORT = 3
-    PAGE_SETTINGS = 4
+    PAGE_OVERVIEW = 2   # объединённая страница «Обзор и отчёт»
+    PAGE_SETTINGS = 3
 
     # UI-шаг -> ключ статуса в .pnos_status.json (учитывает сдвиг воркеров)
     STEP_STATUS_KEYS = {1: "stage1", 2: "stage2", 3: "manual3",
@@ -135,8 +134,7 @@ class MainWindow(QMainWindow):
         nav_specs = [
             ("Процесс", self.PAGE_PROCESS),
             ("Ручной контроль", self.PAGE_MANUAL),
-            ("Обзор", self.PAGE_OVERVIEW),
-            ("Итоговый отчёт", self.PAGE_REPORT),
+            ("Обзор и отчёт", self.PAGE_OVERVIEW),
         ]
         self._nav_buttons = {}
         nav_box = QVBoxLayout()
@@ -215,10 +213,6 @@ class MainWindow(QMainWindow):
         self._setup_overview_page()
         self.pages_stack.addWidget(self.page_overview)
 
-        self.page_report = QWidget()
-        self._setup_report_page()
-        self.pages_stack.addWidget(self.page_report)
-
         self.page_settings = SettingsPage()
         self.pages_stack.addWidget(self.page_settings)
         self.page_settings.theme_changed.connect(self.apply_theme)
@@ -232,10 +226,9 @@ class MainWindow(QMainWindow):
             btn.setChecked(idx == index)
         if index == self.PAGE_OVERVIEW:
             self._refresh_overview()
+            self._refresh_report_page()
         elif index == self.PAGE_MANUAL:
             self._load_manual_points()
-        elif index == self.PAGE_REPORT:
-            self._refresh_report_page()
 
     def _page_title(self, text: str) -> QLabel:
         lbl = QLabel(text)
@@ -451,9 +444,9 @@ class MainWindow(QMainWindow):
 
         if success:
             if step >= 7:
-                # Конвейер завершён — показываем итоговый отчёт
+                # Конвейер завершён — показываем «Обзор и отчёт»
                 self._session_timer.stop()
-                self._switch_page(self.PAGE_REPORT)
+                self._switch_page(self.PAGE_OVERVIEW)
                 return
             next_step = step + 1
             if self.page_settings.chk_auto.isChecked():
@@ -1119,25 +1112,54 @@ class MainWindow(QMainWindow):
     # Страница «Обзор»
     # ═══════════════════════════════════════════════════════════════
 
-    def _setup_overview_page(self):
-        layout = QVBoxLayout(self.page_overview)
-        layout.setContentsMargins(2, 2, 6, 2)
-        layout.setSpacing(10)
+    def _section_header(self, title: str, subtitle: str, button: QPushButton = None):
+        """Заголовок секции объединённой страницы: название + пояснение + кнопка."""
+        row = QHBoxLayout()
+        col = QVBoxLayout()
+        col.setSpacing(2)
+        lbl = QLabel(title)
+        lbl.setObjectName("form_title")
+        col.addWidget(lbl)
+        sub = QLabel(subtitle)
+        sub.setObjectName("card_description")
+        sub.setWordWrap(True)
+        col.addWidget(sub)
+        row.addLayout(col, 1)
+        if button is not None:
+            row.addWidget(button, 0, Qt.AlignTop)
+        return row
 
-        head_row = QHBoxLayout()
-        head_col = QVBoxLayout()
-        head_col.setSpacing(2)
-        head_col.addWidget(self._page_title("Обзор"))
-        self.lbl_overview_summary = QLabel("")
-        self.lbl_overview_summary.setObjectName("card_description")
-        head_col.addWidget(self.lbl_overview_summary)
-        head_row.addLayout(head_col, 1)
+    def _setup_overview_page(self):
+        """Объединённая страница: сверху «Обзор», снизу «Итоговый отчёт»."""
+        outer = QVBoxLayout(self.page_overview)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(2, 2, 8, 2)
+        layout.setSpacing(10)
+        scroll.setWidget(body)
+        outer.addWidget(scroll)
+
+        layout.addWidget(self._page_title("Обзор и отчёт"))
+
+        # ── Секция 1: Обзор — где мы находимся ──
         btn_refresh = QPushButton("Обновить")
         btn_refresh.setObjectName("ghost_button")
         btn_refresh.setCursor(Qt.PointingHandCursor)
         btn_refresh.clicked.connect(self._refresh_overview)
-        head_row.addWidget(btn_refresh, 0, Qt.AlignTop)
-        layout.addLayout(head_row)
+        layout.addLayout(self._section_header(
+            "Обзор — где мы находимся",
+            "Статусы пунктов по шагам. Читаются с диска и сохраняются между запусками программы.",
+            btn_refresh))
+
+        self.lbl_overview_summary = QLabel("")
+        self.lbl_overview_summary.setObjectName("card_description")
+        layout.addWidget(self.lbl_overview_summary)
 
         self.overview_table = QTableWidget()
         headers = ["Пункт"] + [str(i) for i in range(1, 8)]
@@ -1150,16 +1172,42 @@ class MainWindow(QMainWindow):
         hh.setSectionResizeMode(0, QHeaderView.Stretch)
         for c in range(1, len(headers)):
             hh.setSectionResizeMode(c, QHeaderView.ResizeToContents)
-        self.overview_table.setMinimumHeight(240)
-        layout.addWidget(self.overview_table, 1)
+        layout.addWidget(self.overview_table)
 
         lbl_problems = QLabel("Проблемные пункты")
         lbl_problems.setObjectName("section_label")
         layout.addWidget(lbl_problems)
         self.overview_problems = QListWidget()
         self.overview_problems.setObjectName("activity_feed")
-        self.overview_problems.setMinimumHeight(110)
+        self.overview_problems.setMinimumHeight(84)
+        self.overview_problems.setMaximumHeight(140)
         layout.addWidget(self.overview_problems)
+
+        # ── Разделитель секций ──
+        divider = QFrame()
+        divider.setObjectName("h_divider")
+        layout.addSpacing(6)
+        layout.addWidget(divider)
+        layout.addSpacing(6)
+
+        # ── Секция 2: Итоговый отчёт — как прошёл прогон ──
+        btn_open = QPushButton("📂 Папка отчётов")
+        btn_open.setObjectName("ghost_button")
+        btn_open.setCursor(Qt.PointingHandCursor)
+        btn_open.clicked.connect(self._open_reports_folder)
+        layout.addLayout(self._section_header(
+            "Итоговый отчёт — как прошёл прогон",
+            "Детали текущего запуска программы по каждому шагу. Очищается при перезапуске.",
+            btn_open))
+
+        self.lbl_report_summary = QLabel("Отчёт появится после выполнения этапов.")
+        self.lbl_report_summary.setObjectName("card_description")
+        layout.addWidget(self.lbl_report_summary)
+
+        self._report_sections = QVBoxLayout()
+        self._report_sections.setSpacing(10)
+        layout.addLayout(self._report_sections)
+        layout.addStretch()
 
     def _scan_points(self):
         """Сканирует локальную папку: [{name, invalid, missing, skipped, steps{}}]."""
@@ -1244,45 +1292,15 @@ class MainWindow(QMainWindow):
             it.setIcon(dot_icon(STATUS_COLORS["done"]))
             self.overview_problems.addItem(it)
 
+        # Высота матрицы под содержимое (страница прокручивается целиком)
+        h = self.overview_table.horizontalHeader().height() + 2
+        for r in range(self.overview_table.rowCount()):
+            h += self.overview_table.rowHeight(r)
+        self.overview_table.setFixedHeight(max(min(h + 4, 420), 64))
+
     # ═══════════════════════════════════════════════════════════════
     # Страница «Итоговый отчёт»
     # ═══════════════════════════════════════════════════════════════
-
-    def _setup_report_page(self):
-        outer = QVBoxLayout(self.page_report)
-        outer.setContentsMargins(0, 0, 0, 0)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        body = QWidget()
-        self._report_layout = QVBoxLayout(body)
-        self._report_layout.setContentsMargins(2, 2, 8, 2)
-        self._report_layout.setSpacing(10)
-        scroll.setWidget(body)
-        outer.addWidget(scroll)
-
-        head_row = QHBoxLayout()
-        head_col = QVBoxLayout()
-        head_col.setSpacing(2)
-        head_col.addWidget(self._page_title("Итоговый отчёт"))
-        self.lbl_report_summary = QLabel("Отчёт появится после выполнения этапов.")
-        self.lbl_report_summary.setObjectName("card_description")
-        head_col.addWidget(self.lbl_report_summary)
-        head_row.addLayout(head_col, 1)
-        btn_open = QPushButton("📂 Папка отчётов")
-        btn_open.setObjectName("ghost_button")
-        btn_open.setCursor(Qt.PointingHandCursor)
-        btn_open.clicked.connect(self._open_reports_folder)
-        head_row.addWidget(btn_open, 0, Qt.AlignTop)
-        self._report_layout.addLayout(head_row)
-
-        # Контейнер секций (пересобирается при каждом открытии)
-        self._report_sections = QVBoxLayout()
-        self._report_sections.setSpacing(10)
-        self._report_layout.addLayout(self._report_sections)
-        self._report_layout.addStretch()
 
     def _open_reports_folder(self):
         root = self._get_local_root()

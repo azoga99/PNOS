@@ -312,6 +312,13 @@ QLabel#field_note {
     font-size: 11px;
 }
 
+QFrame#h_divider {
+    background-color: @border@;
+    min-height: 1px;
+    max-height: 1px;
+    border: none;
+}
+
 /* ─── Кнопки общие ─────────────────────────────────────────────── */
 QPushButton {
     background-color: @bg_content@;

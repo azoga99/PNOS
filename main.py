@@ -92,10 +92,13 @@ def main():
 
     app = QApplication(sys.argv)
 
-    # Лоадер на время инициализации окна
+    # Лоадер: показывается минимум SPLASH_MS, пока окно готовится
+    SPLASH_MS = 5000
+    import time as _time
     splash = SplashLoader()
     splash.show()
     app.processEvents()
+    splash_started = _time.time()
 
     # Шрифт по умолчанию
     font = QFont("Segoe UI", 10)
@@ -106,10 +109,11 @@ def main():
     if stylesheet:
         app.setStyleSheet(stylesheet)
 
-    # Создаём и показываем окно
+    # Создаём окно; показываем его после того, как лоадер отработал своё
     window = MainWindow()
-    window.show()
-    splash.finish()
+    elapsed_ms = int((_time.time() - splash_started) * 1000)
+    remaining = max(0, SPLASH_MS - elapsed_ms)
+    QTimer.singleShot(remaining, lambda: (window.show(), splash.finish()))
 
     # Фоновый прогрев тяжёлых модулей (pandas, aiohttp, win32com, python-docx).
     # Они импортируются лениво, поэтому старт быстрый; прогрев в фоне делает
