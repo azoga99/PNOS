@@ -45,17 +45,8 @@ class SettingsPage(QWidget):
         scroll_layout.setSpacing(25)
 
         # ── Блок 1: Автоматизация ─────────────────────────────────
-        group_main = QGroupBox("Автоматизация и поиск")
+        group_main = QGroupBox("Автоматизация")
         g1_layout = QVBoxLayout(group_main)
-
-        self.chk_epb = QCheckBox("Искать и скачивать папку «Стар. ЭПБ»")
-        self.chk_epb.setChecked(True)
-        g1_layout.addWidget(self.chk_epb)
-
-        lbl_epb_desc = QLabel("Если галочка снята, программа не будет проверять наличие старых экспертиз.")
-        lbl_epb_desc.setObjectName("hint")
-        lbl_epb_desc.setWordWrap(True)
-        g1_layout.addWidget(lbl_epb_desc)
 
         self.chk_auto = QCheckBox("Автоматический режим (остановка только на ручном шаге 3)")
         self.chk_auto.setChecked(True)
@@ -119,35 +110,7 @@ class SettingsPage(QWidget):
         g_paths_layout.addWidget(lbl_macro_hint)
         scroll_layout.addWidget(group_paths)
 
-        # ── Блок 4: Скорость работы ──────────────────────────────
-        group_speed = QGroupBox("Производительность")
-        g2_layout = QVBoxLayout(group_speed)
-
-        lbl_speed = QLabel("Скорость проверки Яндекс Диска:")
-        g2_layout.addWidget(lbl_speed)
-
-        self.btn_speed_fast = QPushButton("Максимальная")
-        self.btn_speed_fast.setCheckable(True)
-        self.btn_speed_fast.setChecked(True)
-        self.btn_speed_fast.setCursor(Qt.PointingHandCursor)
-        self.btn_speed_fast.setObjectName("segment")
-
-        self.btn_speed_safe = QPushButton("Безопасная")
-        self.btn_speed_safe.setCheckable(True)
-        self.btn_speed_safe.setCursor(Qt.PointingHandCursor)
-        self.btn_speed_safe.setObjectName("segment")
-
-        speed_h = QHBoxLayout()
-        speed_h.addWidget(self.btn_speed_fast)
-        speed_h.addWidget(self.btn_speed_safe)
-        speed_h.addStretch()
-        g2_layout.addLayout(speed_h)
-
-        self.btn_speed_fast.clicked.connect(lambda: self.btn_speed_safe.setChecked(False) or self.btn_speed_fast.setChecked(True))
-        self.btn_speed_safe.clicked.connect(lambda: self.btn_speed_fast.setChecked(False) or self.btn_speed_safe.setChecked(True))
-        scroll_layout.addWidget(group_speed)
-
-        # ── Блок 5: Обновление программы ─────────────────────────
+        # ── Блок 4: Обновление программы ─────────────────────────
         group_update = QGroupBox("Обновление программы")
         g_upd_layout = QVBoxLayout(group_update)
 

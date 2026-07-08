@@ -488,14 +488,13 @@ class MainWindow(QMainWindow):
         self._begin_step(1)
         self._add_activity(1, f"Запуск: {len(manual_points)} пунктов", "wait")
 
-        need_epb = self.page_settings.chk_epb.isChecked()
-        max_threads = 10 if self.page_settings.btn_speed_fast.isChecked() else 3
-
         card = self.step_cards[1]
         from workers.stage1_worker import Stage1Worker
+        # «Стар. ЭПБ» ищется всегда (её отсутствие не блокирует пункт),
+        # скорость сети всегда максимальная.
         worker = Stage1Worker(
             excel_path=None, local_root=local_root, manual_points=manual_points,
-            need_epb=need_epb, max_threads=max_threads, parent=self)
+            need_epb=True, max_threads=10, parent=self)
         worker.log.connect(self._append_log)
         worker.info.connect(lambda msg, cat: self._add_activity(1, msg, cat))
         worker.progress.connect(card.set_progress)

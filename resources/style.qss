@@ -8,6 +8,13 @@
     font-family: "Segoe UI", sans-serif;
 }
 
+/* Базовый цвет текста: не полагаемся на системную палитру Windows —
+   при тёмной системной теме обычные QLabel иначе становятся белыми
+   на светлых панелях (текст «пропадает»). */
+QLabel {
+    color: @text_primary@;
+}
+
 QMainWindow, QWidget#root {
     background-color: @bg_app@;
 }
