@@ -768,9 +768,10 @@ class MainWindow(QMainWindow):
             note="Начните с «транспортировки», далее — конкретное вещество "
                  "(напр. «транспортировки рафината растворителя»)."))
 
+        import user_data
         f["specialist"] = QComboBox()
         f["specialist"].addItem("— выберите —", "")
-        for name in CONFIG.get("SPECIALISTS", []):
+        for name in user_data.get_list("specialists"):
             f["specialist"].addItem(name, name)
         form.addWidget(self._form_field("Специалист (B22)", f["specialist"], required=True))
 
@@ -784,7 +785,7 @@ class MainWindow(QMainWindow):
 
         f["org"] = QComboBox()
         f["org"].addItem("— не выбрано —", "")
-        for org in CONFIG.get("EPB_ORGS", []):
+        for org in user_data.get_list("epb_orgs"):
             f["org"].addItem(org, org)
         f["org"].currentIndexChanged.connect(self._update_epb_done_label)
         form.addWidget(self._form_field(
@@ -862,7 +863,24 @@ class MainWindow(QMainWindow):
         self.manual_progress.setTextVisible(False)
         outer.addWidget(self.manual_progress)
 
+    def _refresh_form_choices(self):
+        """Пересобирает выпадающие списки специалистов/организаций из user_data
+        (могли измениться в настройках), сохраняя текущий выбор."""
+        import user_data
+        for key, list_name in (("specialist", "specialists"), ("org", "epb_orgs")):
+            combo = self.manual_fields[key]
+            current = combo.currentData() or ""
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("— выберите —" if key == "specialist" else "— не выбрано —", "")
+            for val in user_data.get_list(list_name):
+                combo.addItem(val, val)
+            idx = combo.findData(current)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+            combo.blockSignals(False)
+
     def _load_manual_points(self):
+        self._refresh_form_choices()
         points = self._scan_points()
         self.manual_point_list.blockSignals(True)
         self.manual_point_list.clear()
@@ -1161,6 +1179,20 @@ class MainWindow(QMainWindow):
         self.lbl_overview_summary.setObjectName("card_description")
         layout.addWidget(self.lbl_overview_summary)
 
+        reset_row = QHBoxLayout()
+        btn_reset_one = QPushButton("Сбросить статус пункта…")
+        btn_reset_one.setObjectName("ghost_button")
+        btn_reset_one.setCursor(Qt.PointingHandCursor)
+        btn_reset_one.clicked.connect(self._reset_point_dialog)
+        btn_reset_all = QPushButton("Сбросить все статусы")
+        btn_reset_all.setObjectName("ghost_button")
+        btn_reset_all.setCursor(Qt.PointingHandCursor)
+        btn_reset_all.clicked.connect(self._reset_all_statuses)
+        reset_row.addWidget(btn_reset_one)
+        reset_row.addWidget(btn_reset_all)
+        reset_row.addStretch()
+        layout.addLayout(reset_row)
+
         self.overview_table = QTableWidget()
         headers = ["Пункт"] + [str(i) for i in range(1, 8)]
         self.overview_table.setColumnCount(len(headers))
@@ -1297,6 +1329,77 @@ class MainWindow(QMainWindow):
         for r in range(self.overview_table.rowCount()):
             h += self.overview_table.rowHeight(r)
         self.overview_table.setFixedHeight(max(min(h + 4, 420), 64))
+
+    def _reset_point_dialog(self):
+        """Диалог: выбрать пункт и что сбросить (весь пункт / конкретный шаг)."""
+        from PySide6.QtWidgets import QDialog, QComboBox, QDialogButtonBox
+        points = [pt["name"] for pt in self._scan_points()]
+        if not points:
+            QMessageBox.information(self, "Нет пунктов", "В локальной папке нет пунктов.")
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Сброс статуса пункта")
+        v = QVBoxLayout(dlg)
+        v.setContentsMargins(20, 18, 20, 18)
+        v.setSpacing(10)
+
+        v.addWidget(QLabel("Пункт:"))
+        cb_point = QComboBox()
+        cb_point.addItems(points)
+        v.addWidget(cb_point)
+
+        v.addWidget(QLabel("Что сбросить:"))
+        cb_scope = QComboBox()
+        cb_scope.addItem("Весь пункт (обработать заново с шага 1)", "all")
+        for step in range(1, 8):
+            cb_scope.addItem(f"Только шаг {step}: {self.STEP_TITLES[step]}",
+                             self.STEP_STATUS_KEYS[step])
+        v.addWidget(cb_scope)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("Сбросить")
+        buttons.button(QDialogButtonBox.Cancel).setText("Отмена")
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        v.addWidget(buttons)
+
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        from status_manager import reset_point_status, reset_stage_status
+        name = cb_point.currentText()
+        scope = cb_scope.currentData()
+        folder = os.path.join(self._get_local_root(), name)
+        if scope == "all":
+            ok = reset_point_status(folder)
+            msg = f"{name}: статус полностью сброшен" if ok else f"{name}: не удалось сбросить"
+        else:
+            ok = reset_stage_status(folder, scope)
+            msg = f"{name}: сброшен шаг «{scope}»" if ok else f"{name}: не удалось сбросить шаг"
+        self._add_activity(0, msg, "done" if ok else "error")
+        self._refresh_overview()
+
+    def _reset_all_statuses(self):
+        """Сбрасывает статусы всех пунктов (после подтверждения)."""
+        points = self._scan_points()
+        if not points:
+            QMessageBox.information(self, "Нет пунктов", "В локальной папке нет пунктов.")
+            return
+        reply = QMessageBox.question(
+            self, "Сбросить все статусы",
+            f"Сбросить статусы всех пунктов ({len(points)})?\n\n"
+            "Все шаги нужно будет выполнить заново. Скачанные файлы не удаляются.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+        from status_manager import reset_point_status
+        done = 0
+        for pt in points:
+            if reset_point_status(os.path.join(self._get_local_root(), pt["name"])):
+                done += 1
+        self._add_activity(0, f"Сброшены статусы пунктов: {done} из {len(points)}", "done")
+        self._refresh_overview()
 
     # ═══════════════════════════════════════════════════════════════
     # Страница «Итоговый отчёт»

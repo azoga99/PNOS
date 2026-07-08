@@ -10,10 +10,12 @@ from PySide6.QtCore import Qt, Signal, QSettings
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QProgressBar, QLineEdit, QFileDialog, QCheckBox, QFrame,
-    QGroupBox, QScrollArea, QMessageBox, QApplication
+    QGroupBox, QScrollArea, QMessageBox, QApplication,
+    QListWidget, QListWidgetItem, QInputDialog
 )
 
 from version import APP_VERSION
+import user_data
 # updater импортируется лениво (внутри методов), чтобы не тянуть requests при старте.
 
 
@@ -86,6 +88,14 @@ class SettingsPage(QWidget):
 
         scroll_layout.addWidget(group_theme)
 
+        # ── Блок: Списки для формы ручного контроля ──────────────
+        scroll_layout.addWidget(self._build_list_editor(
+            "specialists", "Специалисты (поле B22)",
+            "Список ФИО в выпадающем меню шага «Ручной контроль»."))
+        scroll_layout.addWidget(self._build_list_editor(
+            "epb_orgs", "Организации ЭПБ (поле B52)",
+            "Список организаций в выпадающем меню шага «Ручной контроль»."))
+
         # ── Блок 3: Пути к файлам ────────────────────────────────
         group_paths = QGroupBox("Пути к файлам")
         g_paths_layout = QVBoxLayout(group_paths)
@@ -149,6 +159,30 @@ class SettingsPage(QWidget):
         g_upd_layout.addWidget(self.lbl_update_status)
 
         scroll_layout.addWidget(group_update)
+
+        # ── Блок: Диагностика ────────────────────────────────────
+        group_diag = QGroupBox("Диагностика")
+        g_diag = QVBoxLayout(group_diag)
+        lbl_diag = QLabel("Файл с техническими ошибками — пришлите его разработчику, "
+                          "если программа повела себя некорректно.")
+        lbl_diag.setObjectName("hint")
+        lbl_diag.setWordWrap(True)
+        g_diag.addWidget(lbl_diag)
+        diag_row = QHBoxLayout()
+        btn_open_log = QPushButton("Открыть лог ошибок")
+        btn_open_log.setObjectName("segment")
+        btn_open_log.setCursor(Qt.PointingHandCursor)
+        btn_open_log.clicked.connect(self._open_error_log)
+        btn_open_logdir = QPushButton("Папка логов")
+        btn_open_logdir.setObjectName("segment")
+        btn_open_logdir.setCursor(Qt.PointingHandCursor)
+        btn_open_logdir.clicked.connect(self._open_log_folder)
+        diag_row.addWidget(btn_open_log)
+        diag_row.addWidget(btn_open_logdir)
+        diag_row.addStretch()
+        g_diag.addLayout(diag_row)
+        scroll_layout.addWidget(group_diag)
+
         scroll_layout.addStretch()
 
         # Оборачиваем в QScrollArea
@@ -214,3 +248,108 @@ class SettingsPage(QWidget):
         if reply == QMessageBox.Yes:
             from updater import apply_update_and_restart
             apply_update_and_restart(self._new_exe_path)
+
+    # ── Редактор списков (специалисты / организации) ─────────────
+    def _build_list_editor(self, name: str, title: str, hint: str) -> QGroupBox:
+        group = QGroupBox(title)
+        gl = QVBoxLayout(group)
+
+        lbl_hint = QLabel(hint)
+        lbl_hint.setObjectName("hint")
+        lbl_hint.setWordWrap(True)
+        gl.addWidget(lbl_hint)
+
+        row = QHBoxLayout()
+        lst = QListWidget()
+        lst.setObjectName("point_list")
+        lst.setMaximumHeight(160)
+        for val in user_data.get_list(name):
+            lst.addItem(QListWidgetItem(val))
+        row.addWidget(lst, 1)
+
+        btn_col = QVBoxLayout()
+        btn_col.setSpacing(6)
+
+        def save():
+            items = [lst.item(i).text() for i in range(lst.count())]
+            user_data.set_list(name, items)
+
+        def add():
+            text, ok = QInputDialog.getText(self, "Добавить", "Новое значение:")
+            if ok and text.strip():
+                lst.addItem(QListWidgetItem(text.strip()))
+                save()
+
+        def edit():
+            it = lst.currentItem()
+            if not it:
+                return
+            text, ok = QInputDialog.getText(self, "Изменить", "Значение:", text=it.text())
+            if ok and text.strip():
+                it.setText(text.strip())
+                save()
+
+        def remove():
+            r = lst.currentRow()
+            if r >= 0:
+                lst.takeItem(r)
+                save()
+
+        def move(delta):
+            r = lst.currentRow()
+            nr = r + delta
+            if r < 0 or nr < 0 or nr >= lst.count():
+                return
+            it = lst.takeItem(r)
+            lst.insertItem(nr, it)
+            lst.setCurrentRow(nr)
+            save()
+
+        def reset():
+            if QMessageBox.question(
+                    self, "Сброс списка",
+                    "Вернуть список к стандартным значениям?",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
+                user_data.reset_list(name)
+                lst.clear()
+                for val in user_data.get_list(name):
+                    lst.addItem(QListWidgetItem(val))
+
+        for caption, handler in (
+            ("Добавить", add), ("Изменить", edit), ("Удалить", remove),
+            ("Вверх", lambda: move(-1)), ("Вниз", lambda: move(1)),
+            ("Стандартные", reset),
+        ):
+            b = QPushButton(caption)
+            b.setObjectName("segment")
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(handler)
+            btn_col.addWidget(b)
+        btn_col.addStretch()
+        row.addLayout(btn_col)
+        gl.addLayout(row)
+        return group
+
+    # ── Диагностика ──────────────────────────────────────────────
+    def _log_dir(self) -> str:
+        return os.path.join(os.getcwd(), "logs")
+
+    def _open_error_log(self):
+        path = os.path.join(self._log_dir(), "app_errors.log")
+        if os.path.exists(path):
+            try:
+                os.startfile(path)
+            except Exception as e:
+                QMessageBox.warning(self, "Ошибка", f"Не удалось открыть лог:\n{e}")
+        else:
+            QMessageBox.information(
+                self, "Лог пуст",
+                "Файл лога ошибок ещё не создан — значит, ошибок не было.")
+
+    def _open_log_folder(self):
+        d = self._log_dir()
+        os.makedirs(d, exist_ok=True)
+        try:
+            os.startfile(d)
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка", f"Не удалось открыть папку:\n{e}")

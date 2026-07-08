@@ -92,6 +92,43 @@ def get_status_value(point_folder, key, default=None):
         return default
 
 
+def reset_point_status(point_folder):
+    """Полностью сбрасывает статус пункта — удаляет .pnos_status.json.
+    После этого пункт будет обработан всеми этапами заново."""
+    path = get_status_file_path(point_folder)
+    if os.path.exists(path):
+        try:
+            unhide_file_windows(path)
+            os.remove(path)
+            return True
+        except Exception as e:
+            print(f"Не удалось сбросить статус {point_folder}: {e}")
+            return False
+    return True
+
+
+def reset_stage_status(point_folder, stage_key):
+    """Сбрасывает статус одного шага (удаляет ключ), сохраняя остальные."""
+    path = get_status_file_path(point_folder)
+    if not os.path.exists(path):
+        return True
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return False
+    data.pop(stage_key, None)
+    try:
+        unhide_file_windows(path)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+        hide_file_windows(path)
+        return True
+    except Exception as e:
+        print(f"Не удалось сбросить шаг {stage_key} для {point_folder}: {e}")
+        return False
+
+
 def is_point_blocked(point_folder):
     """
     Пункт заблокирован для обработки, если он помечен «не корректный» (нет
