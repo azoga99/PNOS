@@ -43,63 +43,99 @@ QLabel#section_label {
     font-size: 11px;
 }
 
-/* ─── Шапка-карточка этапа ─────────────────────────────────────── */
-QFrame#page_header {
+/* ─── Карточка шага конвейера ──────────────────────────────────── */
+QFrame#step_card {
     background-color: @bg_panel@;
-    border: 1px solid @border@;
-    border-radius: 12px;
-    padding: 4px;
-}
-
-QLabel#page_header_icon {
-    font-size: 30px;
-}
-
-QLabel#page_header_title {
-    font-size: 20px;
-    font-weight: 800;
-    color: @text_primary@;
-}
-
-QLabel#page_header_desc {
-    font-size: 13px;
-    color: @text_secondary@;
-}
-
-QLabel#page_header_warn {
-    color: @warn@;
-    font-weight: bold;
-    font-size: 12px;
-}
-
-/* ─── Строка метрик этапа ──────────────────────────────────────── */
-QFrame#metrics_bar {
-    background-color: @bg_panel_alt@;
     border: 1px solid @border@;
     border-radius: 10px;
 }
 
-QLabel#metric_value {
-    font-size: 18px;
-    font-weight: 800;
+QFrame#step_card:hover {
+    border-color: @accent@;
+}
+
+QLabel#step_badge {
+    background-color: @border@;
+    color: @text_muted@;
+    border-radius: 15px;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+QLabel#step_badge[status="run"] {
+    background-color: @accent@;
+    color: #ffffff;
+}
+
+QLabel#step_badge[status="done"] {
+    background-color: @success@;
+    color: #ffffff;
+}
+
+QLabel#step_badge[status="error"] {
+    background-color: @error@;
+    color: #ffffff;
+}
+
+QLabel#step_badge[status="wait"] {
+    background-color: @warn@;
+    color: #ffffff;
+}
+
+QLabel#step_title {
+    font-size: 13px;
+    font-weight: 700;
     color: @text_primary@;
 }
 
-QLabel#metric_value_good { color: @success@; }
-QLabel#metric_value_bad { color: @error@; }
-QLabel#metric_value_skip { color: @text_faint@; }
-QLabel#metric_value_accent { color: @accent@; }
-
-QLabel#metric_caption {
+QLabel#step_summary {
     font-size: 11px;
     color: @text_muted@;
+}
+
+QPushButton#step_action {
+    background-color: @accent@;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 7px 16px;
+    font-size: 12px;
     font-weight: 600;
 }
 
-QFrame#metric_divider {
+QPushButton#step_action:hover { background-color: @accent_hover@; }
+QPushButton#step_action:pressed { background-color: @accent_press@; }
+QPushButton#step_action:disabled {
     background-color: @border@;
-    max-width: 1px;
-    min-width: 1px;
+    color: @text_faint@;
+}
+
+QPushButton#step_stop {
+    background-color: transparent;
+    color: @error@;
+    border: 1px solid @error@;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QPushButton#step_stop:hover {
+    background-color: @error@;
+    color: #ffffff;
+}
+
+QProgressBar#step_progress {
+    border: none;
+    background-color: @border@;
+    border-radius: 2px;
+    min-height: 4px;
+    max-height: 4px;
+}
+
+QProgressBar#step_progress::chunk {
+    background-color: @accent@;
+    border-radius: 2px;
 }
 
 /* ─── Панель настроек ──────────────────────────────────────────── */
@@ -300,26 +336,23 @@ QPushButton#browse_btn {
     font-size: 14px;
 }
 
-/* ─── Основные кнопки-карточки ─────────────────────────────────── */
+/* ─── Основные кнопки ──────────────────────────────────────────── */
 QPushButton#card_button {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 @accent@, stop:1 @accent2@);
+    background-color: @accent@;
     color: #ffffff;
     border: none;
-    border-radius: 8px;
+    border-radius: 7px;
     padding: 9px 20px;
     font-size: 12px;
     font-weight: 700;
 }
 
 QPushButton#card_button:hover {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 @accent_hover@, stop:1 @accent2_hover@);
+    background-color: @accent_hover@;
 }
 
 QPushButton#card_button:pressed {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 @accent_press@, stop:1 @accent2_press@);
+    background-color: @accent_press@;
 }
 
 QPushButton#card_button:disabled {
@@ -346,23 +379,21 @@ QPushButton#ghost_button:hover {
 
 /* ─── Кнопка «Стоп» ────────────────────────────────────────────── */
 QPushButton#stop_button {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 @error@, stop:1 @error_strong@);
+    background-color: @error@;
     color: #ffffff;
     border: none;
-    border-radius: 8px;
+    border-radius: 7px;
     padding: 9px 15px;
     font-size: 11px;
     font-weight: 700;
 }
 
 QPushButton#stop_button:hover {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 @error_hover@, stop:1 @error@);
+    background-color: @error_hover@;
 }
 
 QPushButton#stop_button:pressed {
-    background: @error_strong@;
+    background-color: @error_strong@;
 }
 
 QPushButton#stop_button:disabled {
@@ -411,14 +442,13 @@ QTextEdit#log_panel {
 QProgressBar {
     border: none;
     background-color: @border@;
-    border-radius: 6px;
-    min-height: 10px;
+    border-radius: 4px;
+    min-height: 8px;
 }
 
 QProgressBar::chunk {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 @accent@, stop:1 @accent2@);
-    border-radius: 6px;
+    background-color: @accent@;
+    border-radius: 4px;
 }
 
 QProgressBar#global_progress {
@@ -521,15 +551,6 @@ QTableWidget::item:selected {
     color: @text_primary@;
 }
 
-QTableWidget#preview_table {
-    background-color: @dark_panel@;
-    gridline-color: @dark_panel_border@;
-    color: @dark_panel_text@;
-    font-size: 10px;
-    border: 1px solid @dark_panel_border@;
-    border-radius: 4px;
-}
-
 QHeaderView::section {
     background-color: @bg_panel_alt@;
     color: @text_muted@;
@@ -568,13 +589,6 @@ QLabel#sidebar_subtitle {
     font-weight: 800;
 }
 
-QLabel#sidebar_section {
-    color: @sidebar_muted@;
-    font-size: 10px;
-    font-weight: 700;
-    padding: 4px 24px;
-}
-
 QPushButton#nav_button {
     background-color: transparent;
     border: none;
@@ -601,12 +615,6 @@ QPushButton#nav_button:checked {
 
 QPushButton#nav_button:disabled {
     color: @sidebar_muted@;
-}
-
-/* Индикатор статуса шага (точка слева от текста) */
-QLabel#nav_status {
-    font-size: 13px;
-    min-width: 16px;
 }
 
 QLabel#global_caption {
@@ -662,24 +670,26 @@ QPushButton#link_button:hover {
     text-decoration: underline;
 }
 
-/* ─── Лента активности ─────────────────────────────────────────── */
+/* ─── Журнал (строгая лента) ───────────────────────────────────── */
 QListWidget#activity_feed {
     background-color: @bg_panel@;
     border: 1px solid @border@;
     border-radius: 8px;
-    padding: 5px;
-    font-size: 12px;
+    padding: 6px;
+    font-size: 11px;
     color: @text_secondary@;
     outline: none;
 }
 
 QListWidget#activity_feed::item {
-    padding: 4px 8px;
-    border-bottom: 1px solid @border@;
+    padding: 3px 6px;
+    border: none;
 }
 
-QListWidget#activity_feed::item:last {
-    border-bottom: none;
+QListWidget#activity_feed::item:selected {
+    background-color: @bg_panel_alt@;
+    color: @text_primary@;
+    border-radius: 4px;
 }
 
 /* ─── Список пунктов (форма ручного контроля / обзор) ──────────── */
@@ -733,12 +743,3 @@ QLabel#form_title {
     color: @text_primary@;
 }
 
-QLabel#summary_stats {
-    font-size: 16px;
-    color: @text_primary@;
-}
-
-QLabel#status_pill_ok { color: @success@; font-weight: 700; }
-QLabel#status_pill_wait { color: @text_muted@; font-weight: 700; }
-QLabel#status_pill_skip { color: @text_faint@; font-weight: 700; }
-QLabel#status_pill_bad { color: @error@; font-weight: 700; }

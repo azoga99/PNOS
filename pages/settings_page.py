@@ -34,7 +34,7 @@ class SettingsPage(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(20)
 
-        title = QLabel("⚙️ Настройки программы")
+        title = QLabel("Настройки")
         title.setObjectName("app_title")
         layout.addWidget(title)
 
@@ -70,12 +70,12 @@ class SettingsPage(QWidget):
         lbl_theme = QLabel("Тема интерфейса:")
         g_theme_layout.addWidget(lbl_theme)
 
-        self.btn_theme_light = QPushButton("☀️ Светлая")
+        self.btn_theme_light = QPushButton("Светлая")
         self.btn_theme_light.setCheckable(True)
         self.btn_theme_light.setCursor(Qt.PointingHandCursor)
         self.btn_theme_light.setObjectName("segment")
 
-        self.btn_theme_dark = QPushButton("🌙 Тёмная")
+        self.btn_theme_dark = QPushButton("Тёмная")
         self.btn_theme_dark.setCheckable(True)
         self.btn_theme_dark.setCursor(Qt.PointingHandCursor)
         self.btn_theme_dark.setObjectName("segment")
@@ -126,13 +126,13 @@ class SettingsPage(QWidget):
         lbl_speed = QLabel("Скорость проверки Яндекс Диска:")
         g2_layout.addWidget(lbl_speed)
 
-        self.btn_speed_fast = QPushButton("🚀 Максимальная")
+        self.btn_speed_fast = QPushButton("Максимальная")
         self.btn_speed_fast.setCheckable(True)
         self.btn_speed_fast.setChecked(True)
         self.btn_speed_fast.setCursor(Qt.PointingHandCursor)
         self.btn_speed_fast.setObjectName("segment")
 
-        self.btn_speed_safe = QPushButton("🐢 Безопасная")
+        self.btn_speed_safe = QPushButton("Безопасная")
         self.btn_speed_safe.setCheckable(True)
         self.btn_speed_safe.setCursor(Qt.PointingHandCursor)
         self.btn_speed_safe.setObjectName("segment")
@@ -160,13 +160,13 @@ class SettingsPage(QWidget):
         lbl_upd_desc.setWordWrap(True)
         g_upd_layout.addWidget(lbl_upd_desc)
 
-        self.btn_check_update = QPushButton("🔍 Проверить обновления")
+        self.btn_check_update = QPushButton("Проверить обновления")
         self.btn_check_update.setObjectName("blue_button")
         self.btn_check_update.setCursor(Qt.PointingHandCursor)
         self.btn_check_update.clicked.connect(self._check_for_updates)
         g_upd_layout.addWidget(self.btn_check_update)
 
-        self.btn_install_update = QPushButton("⬇️ Установить и перезапустить")
+        self.btn_install_update = QPushButton("Установить и перезапустить")
         self.btn_install_update.setObjectName("green_button")
         self.btn_install_update.setCursor(Qt.PointingHandCursor)
         self.btn_install_update.clicked.connect(self._install_update)
@@ -213,7 +213,7 @@ class SettingsPage(QWidget):
     def _check_for_updates(self):
         """Запуск проверки и скачивания обновлений с GitHub Releases."""
         self.btn_check_update.setEnabled(False)
-        self.btn_check_update.setText("⏳ Проверка...")
+        self.btn_check_update.setText("Проверка…")
         self.btn_install_update.setVisible(False)
         self.update_progress.setVisible(True)
         self.update_progress.setValue(0)
@@ -231,7 +231,7 @@ class SettingsPage(QWidget):
 
     def _on_update_finished(self, success: bool, message: str):
         self.btn_check_update.setEnabled(True)
-        self.btn_check_update.setText("🔍 Проверить обновления")
+        self.btn_check_update.setText("Проверить обновления")
         self.lbl_update_status.setText(message)
 
         if success and self._update_worker and self._update_worker.new_exe_path:

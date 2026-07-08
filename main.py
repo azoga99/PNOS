@@ -7,12 +7,13 @@
 import sys
 import os
 
-from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QSettings, Qt, QTimer, QRectF
+from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtGui import QFont, QPixmap, QPainter, QPen, QColor
 
 from main_window import MainWindow
 from theme import build_stylesheet
+from utils import resource_path
 
 
 def load_stylesheet() -> str:
@@ -20,6 +21,64 @@ def load_stylesheet() -> str:
     settings = QSettings("PNOS", "PNOS")
     theme_name = settings.value("theme", "light")
     return build_stylesheet(theme_name)
+
+
+class SplashLoader(QWidget):
+    """Лоадер запуска: иконка программы с вращающейся дугой вокруг неё."""
+
+    SIZE = 180
+    ICON = 84
+    RING_MARGIN = 22
+
+    def __init__(self):
+        super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+                         | Qt.SplashScreen)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setFixedSize(self.SIZE, self.SIZE)
+
+        icon_path = resource_path(os.path.join("resources", "icon.png"))
+        self._icon = QPixmap(icon_path)
+        if not self._icon.isNull():
+            self._icon = self._icon.scaled(
+                self.ICON, self.ICON, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+        self._angle = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(16)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start()
+
+        # По центру экрана
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.move(screen.center().x() - self.SIZE // 2,
+                  screen.center().y() - self.SIZE // 2)
+
+    def _tick(self):
+        self._angle = (self._angle + 6) % 360
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+
+        # Иконка по центру
+        if not self._icon.isNull():
+            x = (self.width() - self._icon.width()) // 2
+            y = (self.height() - self._icon.height()) // 2
+            p.drawPixmap(x, y, self._icon)
+
+        # Вращающаяся дуга вокруг иконки
+        m = self.RING_MARGIN
+        rect = QRectF(m, m, self.width() - 2 * m, self.height() - 2 * m)
+        pen = QPen(QColor("#6366f1"), 4)
+        pen.setCapStyle(Qt.RoundCap)
+        p.setPen(pen)
+        p.drawArc(rect, -self._angle * 16, 100 * 16)
+        p.end()
+
+    def finish(self):
+        self._timer.stop()
+        self.close()
 
 
 def main():
@@ -33,6 +92,11 @@ def main():
 
     app = QApplication(sys.argv)
 
+    # Лоадер на время инициализации окна
+    splash = SplashLoader()
+    splash.show()
+    app.processEvents()
+
     # Шрифт по умолчанию
     font = QFont("Segoe UI", 10)
     app.setFont(font)
@@ -45,6 +109,7 @@ def main():
     # Создаём и показываем окно
     window = MainWindow()
     window.show()
+    splash.finish()
 
     # Фоновый прогрев тяжёлых модулей (pandas, aiohttp, win32com, python-docx).
     # Они импортируются лениво, поэтому старт быстрый; прогрев в фоне делает
@@ -63,7 +128,7 @@ def _prewarm_heavy_imports():
         for mod in (
             "workers.stage1_worker", "workers.stage2_worker", "workers.stage3_worker",
             "workers.stage4_worker", "workers.stage5_worker", "workers.stage6_worker",
-            "report_dialog",
+            "workers.manual3_worker",
         ):
             try:
                 importlib.import_module(mod)
