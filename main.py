@@ -16,6 +16,13 @@ from theme import build_stylesheet
 from utils import resource_path
 
 
+def load_stylesheet() -> str:
+    """Собирает QSS для текущей темы (light/dark) из QSettings."""
+    settings = QSettings("PNOS", "PNOS")
+    theme_name = settings.value("theme", "light")
+    return build_stylesheet(theme_name)
+
+
 def _extract_logo_mark() -> QPixmap:
     """Вырезает из resources/icon.png сам знак логотипа (без текста «PNOS…»
     и белых полей): сканирует левую часть картинки и берёт границы непустых
