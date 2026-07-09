@@ -46,61 +46,11 @@ class SettingsPage(QWidget):
         scroll_layout.setContentsMargins(0, 0, 10, 0)
         scroll_layout.setSpacing(25)
 
-        # ── Блок 1: Автоматизация ─────────────────────────────────
-        group_main = QGroupBox("Автоматизация")
-        g1_layout = QVBoxLayout(group_main)
-
-        self.chk_auto = QCheckBox("Автоматический режим (остановка только на ручном шаге 3)")
-        self.chk_auto.setChecked(True)
-        g1_layout.addWidget(self.chk_auto)
-
-        scroll_layout.addWidget(group_main)
-
-        # ── Блок 2: Оформление ───────────────────────────────────
-        group_theme = QGroupBox("Оформление")
-        g_theme_layout = QVBoxLayout(group_theme)
-
-        lbl_theme = QLabel("Тема интерфейса:")
-        g_theme_layout.addWidget(lbl_theme)
-
-        self.btn_theme_light = QPushButton("Светлая")
-        self.btn_theme_light.setCheckable(True)
-        self.btn_theme_light.setCursor(Qt.PointingHandCursor)
-        self.btn_theme_light.setObjectName("segment")
-
-        self.btn_theme_dark = QPushButton("Тёмная")
-        self.btn_theme_dark.setCheckable(True)
-        self.btn_theme_dark.setCursor(Qt.PointingHandCursor)
-        self.btn_theme_dark.setObjectName("segment")
-
-        cur_theme = self._settings.value("theme", "light")
-        self.btn_theme_light.setChecked(cur_theme != "dark")
-        self.btn_theme_dark.setChecked(cur_theme == "dark")
-
-        theme_h = QHBoxLayout()
-        theme_h.addWidget(self.btn_theme_light)
-        theme_h.addWidget(self.btn_theme_dark)
-        theme_h.addStretch()
-        g_theme_layout.addLayout(theme_h)
-
-        self.btn_theme_light.clicked.connect(lambda: self._select_theme("light"))
-        self.btn_theme_dark.clicked.connect(lambda: self._select_theme("dark"))
-
-        scroll_layout.addWidget(group_theme)
-
-        # ── Блок: Списки для формы ручного контроля ──────────────
-        scroll_layout.addWidget(self._build_list_editor(
-            "specialists", "Специалисты (поле B22)",
-            "Список ФИО в выпадающем меню шага «Ручной контроль»."))
-        scroll_layout.addWidget(self._build_list_editor(
-            "epb_orgs", "Организации ЭПБ (поле B52)",
-            "Список организаций в выпадающем меню шага «Ручной контроль»."))
-
-        # ── Блок 3: Пути к файлам ────────────────────────────────
-        group_paths = QGroupBox("Пути к файлам")
+        # ── Блок 1: План-график ──────────────────────────────────
+        group_paths = QGroupBox("План-график")
         g_paths_layout = QVBoxLayout(group_paths)
 
-        lbl_macro = QLabel("Мастер-файл с макросом (для шага 4):")
+        lbl_macro = QLabel("Мастер-файл сводного графика (для шага 4):")
         g_paths_layout.addWidget(lbl_macro)
 
         macro_box = QHBoxLayout()
@@ -120,7 +70,7 @@ class SettingsPage(QWidget):
         g_paths_layout.addWidget(lbl_macro_hint)
         scroll_layout.addWidget(group_paths)
 
-        # ── Блок 4: Обновление программы ─────────────────────────
+        # ── Блок 2: Обновление программы ─────────────────────────
         group_update = QGroupBox("Обновление программы")
         g_upd_layout = QVBoxLayout(group_update)
 
@@ -160,7 +110,57 @@ class SettingsPage(QWidget):
 
         scroll_layout.addWidget(group_update)
 
-        # ── Блок: Диагностика ────────────────────────────────────
+        # ── Блок 3: Автоматизация ────────────────────────────────
+        group_main = QGroupBox("Автоматизация")
+        g1_layout = QVBoxLayout(group_main)
+
+        self.chk_auto = QCheckBox("Автоматический режим (остановка только на ручном шаге 3)")
+        self.chk_auto.setChecked(True)
+        g1_layout.addWidget(self.chk_auto)
+
+        scroll_layout.addWidget(group_main)
+
+        # ── Блок 4: Оформление ───────────────────────────────────
+        group_theme = QGroupBox("Оформление")
+        g_theme_layout = QVBoxLayout(group_theme)
+
+        lbl_theme = QLabel("Тема интерфейса:")
+        g_theme_layout.addWidget(lbl_theme)
+
+        self.btn_theme_light = QPushButton("Светлая")
+        self.btn_theme_light.setCheckable(True)
+        self.btn_theme_light.setCursor(Qt.PointingHandCursor)
+        self.btn_theme_light.setObjectName("segment")
+
+        self.btn_theme_dark = QPushButton("Тёмная")
+        self.btn_theme_dark.setCheckable(True)
+        self.btn_theme_dark.setCursor(Qt.PointingHandCursor)
+        self.btn_theme_dark.setObjectName("segment")
+
+        cur_theme = self._settings.value("theme", "light")
+        self.btn_theme_light.setChecked(cur_theme != "dark")
+        self.btn_theme_dark.setChecked(cur_theme == "dark")
+
+        theme_h = QHBoxLayout()
+        theme_h.addWidget(self.btn_theme_light)
+        theme_h.addWidget(self.btn_theme_dark)
+        theme_h.addStretch()
+        g_theme_layout.addLayout(theme_h)
+
+        self.btn_theme_light.clicked.connect(lambda: self._select_theme("light"))
+        self.btn_theme_dark.clicked.connect(lambda: self._select_theme("dark"))
+
+        scroll_layout.addWidget(group_theme)
+
+        # ── Блок 5: Списки для формы ручного контроля ────────────
+        scroll_layout.addWidget(self._build_list_editor(
+            "specialists", "Специалисты (поле B22)",
+            "Список ФИО в выпадающем меню шага «Ручной контроль»."))
+        scroll_layout.addWidget(self._build_list_editor(
+            "epb_orgs", "Организации ЭПБ (поле B52)",
+            "Список организаций в выпадающем меню шага «Ручной контроль»."))
+
+        # ── Блок 6: Диагностика ──────────────────────────────────
         group_diag = QGroupBox("Диагностика")
         g_diag = QVBoxLayout(group_diag)
         lbl_diag = QLabel("Файл с техническими ошибками — пришлите его разработчику, "
@@ -295,16 +295,6 @@ class SettingsPage(QWidget):
                 lst.takeItem(r)
                 save()
 
-        def move(delta):
-            r = lst.currentRow()
-            nr = r + delta
-            if r < 0 or nr < 0 or nr >= lst.count():
-                return
-            it = lst.takeItem(r)
-            lst.insertItem(nr, it)
-            lst.setCurrentRow(nr)
-            save()
-
         def reset():
             if QMessageBox.question(
                     self, "Сброс списка",
@@ -317,7 +307,6 @@ class SettingsPage(QWidget):
 
         for caption, handler in (
             ("Добавить", add), ("Изменить", edit), ("Удалить", remove),
-            ("Вверх", lambda: move(-1)), ("Вниз", lambda: move(1)),
             ("Стандартные", reset),
         ):
             b = QPushButton(caption)

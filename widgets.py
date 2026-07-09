@@ -11,8 +11,16 @@ from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QColor, QIcon, QPixmap, QPainter, QBrush
 from PySide6.QtWidgets import (
     QFrame, QLabel, QPushButton, QProgressBar, QHBoxLayout, QVBoxLayout,
-    QGraphicsDropShadowEffect, QSizePolicy,
+    QGraphicsDropShadowEffect, QSizePolicy, QComboBox,
 )
+
+
+class NoWheelComboBox(QComboBox):
+    """QComboBox, игнорирующий колесо мыши: при прокрутке страницы значение
+    в поле случайно не меняется. Раскрытый список скроллится как обычно."""
+
+    def wheelEvent(self, event):
+        event.ignore()
 
 # Цвета статусов (совпадают по смыслу с палитрами theme.py)
 STATUS_COLORS = {

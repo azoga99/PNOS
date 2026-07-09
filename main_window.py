@@ -648,27 +648,32 @@ class MainWindow(QMainWindow):
     # ═══════════════════════════════════════════════════════════════
 
     def _make_date_edit(self):
-        from PySide6.QtWidgets import QDateEdit
-        from PySide6.QtCore import QDate
-        de = QDateEdit()
-        de.setCalendarPopup(True)
-        de.setDisplayFormat("dd.MM.yyyy")
-        de.setMinimumDate(QDate(1900, 1, 1))
-        de.setSpecialValueText("— не выбрана —")
-        de.setDate(QDate(1900, 1, 1))
+        """Поле даты с жёсткой маской дд.мм.гггг (без календаря)."""
+        de = QLineEdit()
+        de.setInputMask("00.00.0000;_")
+        de.setCursorPosition(0)
         return de
 
     def _date_edit_value(self, de) -> str:
-        from PySide6.QtCore import QDate
-        if de.date() == QDate(1900, 1, 1):
+        """Строка дд.мм.гггг или '' если поле пустое (одни подчёркивания)."""
+        s = de.text().strip()
+        if not any(c.isdigit() for c in s):
             return ""
-        return de.date().toString("dd.MM.yyyy")
+        return s
 
     def _set_date_edit(self, de, value: str):
+        de.setText((value or "").strip())
+        de.setCursorPosition(0)
+
+    @staticmethod
+    def _date_ok_or_empty(s: str) -> bool:
+        """Пустая строка — ок; иначе должна быть существующая дата дд.мм.гггг."""
+        s = (s or "").strip()
+        if not s:
+            return True
         from PySide6.QtCore import QDate
-        s = (value or "").strip()
-        d = QDate.fromString(s, "dd.MM.yyyy") if s else QDate()
-        de.setDate(d if d.isValid() else QDate(1900, 1, 1))
+        d = QDate.fromString(s, "dd.MM.yyyy")
+        return d.isValid() and 1900 <= d.year() <= 2100
 
     def _form_field(self, label_text: str, widget, required: bool = False, note: str = ""):
         block = QWidget()
@@ -695,7 +700,7 @@ class MainWindow(QMainWindow):
         return block
 
     def _setup_manual_page(self):
-        from PySide6.QtWidgets import QComboBox
+        from widgets import NoWheelComboBox as QComboBox
         from PySide6.QtGui import QIntValidator
 
         self.manual_drafts = {}
@@ -777,7 +782,7 @@ class MainWindow(QMainWindow):
 
         f["date"] = self._make_date_edit()
         form.addWidget(self._form_field("Дата (B33)", f["date"], required=True,
-                                        note="Формат ДД.ММ.ГГГГ, выбор через календарь."))
+                                        note="Введите дату цифрами в формате дд.мм.гггг."))
 
         sep = QLabel("Данные предыдущей ЭПБ")
         sep.setObjectName("section_label")
@@ -800,18 +805,10 @@ class MainWindow(QMainWindow):
         f["reg_num"].setPlaceholderText("Рег. номер Ростехнадзора или внутренний")
         form.addWidget(self._form_field("Регистрационный номер (B53)", f["reg_num"], required=False))
 
-        epb_date_row = QWidget()
-        edr = QHBoxLayout(epb_date_row)
-        edr.setContentsMargins(0, 0, 0, 0)
-        edr.setSpacing(6)
         f["epb_date"] = self._make_date_edit()
-        edr.addWidget(f["epb_date"], 1)
-        btn_clr = QPushButton("Очистить")
-        btn_clr.setObjectName("ghost_button")
-        btn_clr.setCursor(Qt.PointingHandCursor)
-        btn_clr.clicked.connect(lambda: self._set_date_edit(f["epb_date"], ""))
-        edr.addWidget(btn_clr)
-        form.addWidget(self._form_field("Дата предыдущей ЭПБ (B54)", epb_date_row, required=False))
+        form.addWidget(self._form_field(
+            "Дата предыдущей ЭПБ (B54)", f["epb_date"], required=False,
+            note="Формат дд.мм.гггг. Если даты нет — оставьте поле пустым."))
 
         f["sheets"] = QLineEdit()
         f["sheets"].setValidator(QIntValidator(0, 100000, self))
@@ -944,7 +941,15 @@ class MainWindow(QMainWindow):
         purpose = (values.get("purpose") or "").strip()
         specialist = (values.get("specialist") or "").strip()
         date = (values.get("date") or "").strip()
-        return bool(purpose) and bool(specialist) and bool(date)
+        # B33 обязательна и должна быть существующей датой;
+        # B54 необязательна, но если введена — тоже должна быть корректной.
+        if not (purpose and specialist and date):
+            return False
+        if not self._date_ok_or_empty(date):
+            return False
+        if not self._date_ok_or_empty(values.get("epb_date", "")):
+            return False
+        return True
 
     def _on_manual_point_selected(self, current, previous):
         if self._manual_loading:
@@ -1087,8 +1092,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self, "Заполнены не все пункты",
                 "Не заполнены обязательные поля (Предназначение, Специалист, Дата) "
-                "у пунктов:\n\n" + ", ".join(not_ready) +
-                "\n\nЗаполните их или нажмите «Пропустить пункт».")
+                "или даты введены некорректно у пунктов:\n\n" + ", ".join(not_ready) +
+                "\n\nПроверьте поля или нажмите «Пропустить пункт».")
             self._add_activity(3, f"Не заполнены пункты: {', '.join(not_ready)}", "warn")
             return
 
@@ -1332,7 +1337,8 @@ class MainWindow(QMainWindow):
 
     def _reset_point_dialog(self):
         """Диалог: выбрать пункт и что сбросить (весь пункт / конкретный шаг)."""
-        from PySide6.QtWidgets import QDialog, QComboBox, QDialogButtonBox
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox
+        from widgets import NoWheelComboBox as QComboBox
         points = [pt["name"] for pt in self._scan_points()]
         if not points:
             QMessageBox.information(self, "Нет пунктов", "В локальной папке нет пунктов.")

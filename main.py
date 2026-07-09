@@ -23,25 +23,24 @@ def load_stylesheet() -> str:
     return build_stylesheet(theme_name)
 
 
-def _extract_logo_mark() -> QPixmap:
-    """Вырезает из resources/icon.png сам знак логотипа (без текста «PNOS…»
-    и белых полей): сканирует левую часть картинки и берёт границы непустых
-    (не-белых) пикселей. Возвращает QPixmap знака или пустой при неудаче."""
+def _extract_logo_region(x0_frac: float, x1_frac: float) -> QImage:
+    """Вырезает из resources/icon.png область с непустыми (не-белыми)
+    пикселями в горизонтальной полосе [x0_frac..x1_frac] ширины картинки.
+    Слева живёт знак, справа — текст «PNOS INDUSTRIAL SOFTWARE»."""
     path = resource_path(os.path.join("resources", "icon.png"))
     img = QImage(path)
     if img.isNull():
-        return QPixmap()
+        return QImage()
     img = img.convertToFormat(QImage.Format_ARGB32)
     w, h = img.width(), img.height()
-    scan_w = int(w * 0.44)  # знак слева, текст «PNOS…» правее — сканируем только знак
+    x_from, x_to = int(w * x0_frac), int(w * x1_frac)
 
     minx, miny, maxx, maxy = w, h, 0, 0
     found = False
     step = max(1, w // 400)
     for y in range(0, h, step):
-        for x in range(0, scan_w, step):
+        for x in range(x_from, x_to, step):
             c = img.pixelColor(x, y)
-            # «не-белый и не-прозрачный» пиксель = часть знака
             if c.alpha() > 20 and not (c.red() > 240 and c.green() > 240 and c.blue() > 240):
                 found = True
                 if x < minx: minx = x
@@ -49,31 +48,49 @@ def _extract_logo_mark() -> QPixmap:
                 if x > maxx: maxx = x
                 if y > maxy: maxy = y
     if not found or maxx <= minx or maxy <= miny:
-        return QPixmap.fromImage(img)
+        return img
 
     pad = int(min(w, h) * 0.02)
-    minx = max(0, minx - pad); miny = max(0, miny - pad)
-    maxx = min(w, maxx + pad); maxy = min(h, maxy + pad)
-    return QPixmap.fromImage(img.copy(QRect(minx, miny, maxx - minx, maxy - miny)))
+    minx = max(x_from, minx - pad); miny = max(0, miny - pad)
+    maxx = min(x_to, maxx + pad); maxy = min(h, maxy + pad)
+    return img.copy(QRect(minx, miny, maxx - minx, maxy - miny))
 
 
 class SplashLoader(QWidget):
-    """Лоадер запуска: знак логотипа на карточке + полоса прогресса,
-    заполняющаяся за отведённое время (создаёт ощущение «прорисовки»)."""
+    """Лоадер запуска: знак логотипа «заливается» родным цветом снизу вверх,
+    а текст с иконки проявляется рядом слева направо (как будто пишется).
 
-    W, H = 300, 330
-    DURATION_MS = 5000
+    Фон вырезок из icon.png белый, поэтому карточка лоадера тоже строго
+    белая — серый grayscale-силуэт знака выглядит как незалитый контур."""
 
-    def __init__(self, duration_ms: int = 5000):
+    W, H = 560, 240
+    MARK_H = 132          # высота знака на лоадере
+    GAP = 28              # расстояние между знаком и текстом
+
+    def __init__(self, duration_ms: int = 3000):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
                          | Qt.SplashScreen)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFixedSize(self.W, self.H)
         self.DURATION_MS = duration_ms
 
-        mark = _extract_logo_mark()
-        self._mark = mark.scaled(150, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation) \
-            if not mark.isNull() else QPixmap()
+        # Знак (слева) — цветной и серый силуэт
+        mark_img = _extract_logo_region(0.0, 0.44)
+        self._mark = QPixmap()
+        self._mark_gray = QPixmap()
+        if not mark_img.isNull():
+            scaled = mark_img.scaledToHeight(self.MARK_H, Qt.SmoothTransformation)
+            self._mark = QPixmap.fromImage(scaled)
+            gray = scaled.convertToFormat(QImage.Format_Grayscale8)
+            self._mark_gray = QPixmap.fromImage(gray)
+
+        # Текст «PNOS INDUSTRIAL SOFTWARE» (справа), высота пропорциональна знаку
+        text_img = _extract_logo_region(0.44, 1.0)
+        self._text = QPixmap()
+        if not text_img.isNull() and mark_img.height() > 0:
+            t_h = max(24, int(self.MARK_H * text_img.height() / mark_img.height()))
+            self._text = QPixmap.fromImage(
+                text_img.scaledToHeight(t_h, Qt.SmoothTransformation))
 
         self._t = QElapsedTimer()
         self._t.start()
@@ -92,7 +109,7 @@ class SplashLoader(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
 
-        # Карточка со скруглением
+        # Белая карточка со скруглением (фон совпадает с фоном вырезок логотипа)
         card = QRectF(10, 10, self.W - 20, self.H - 20)
         path = QPainterPath()
         path.addRoundedRect(card, 20, 20)
@@ -100,35 +117,37 @@ class SplashLoader(QWidget):
         p.setPen(QPen(QColor("#e2e8f0"), 1))
         p.drawPath(path)
 
-        # Знак логотипа по центру верхней части
+        prog = self._progress()
+
+        # Компоновка: знак + текст по центру карточки
+        total_w = self._mark.width() + (self.GAP + self._text.width() if not self._text.isNull() else 0)
+        mx = (self.W - total_w) // 2
+        my = (self.H - self._mark.height()) // 2
+
         if not self._mark.isNull():
-            prog = self._progress()
-            mx = (self.W - self._mark.width()) // 2
-            my = 46
-            # Лёгкое «проявление»: непрозрачность нарастает в первые 40% времени
-            p.setOpacity(min(1.0, prog / 0.4) if prog < 0.4 else 1.0)
+            # Серый силуэт знака
+            p.drawPixmap(mx, my, self._mark_gray)
+            # Заливка цветом снизу вверх (первые 75% времени)
+            fill = min(1.0, prog / 0.75)
+            mh = self._mark.height()
+            top = int(mh * (1.0 - fill))
+            p.save()
+            p.setClipRect(QRect(mx, my + top, self._mark.width(), mh - top))
             p.drawPixmap(mx, my, self._mark)
-            p.setOpacity(1.0)
+            p.restore()
 
-        # Название
-        p.setPen(QColor("#1e3a5f"))
-        f = QFont("Segoe UI", 20, QFont.Bold)
-        f.setLetterSpacing(QFont.AbsoluteSpacing, 2)
-        p.setFont(f)
-        p.drawText(QRect(0, 214, self.W, 34), Qt.AlignCenter, "ПНОС")
+        if not self._text.isNull():
+            # Текст «пишется» слева направо (с 30% до 100% времени)
+            t_phase = 0.0 if prog < 0.3 else min(1.0, (prog - 0.3) / 0.7)
+            if t_phase > 0:
+                tx = mx + self._mark.width() + self.GAP
+                ty = my + (self._mark.height() - self._text.height()) // 2
+                p.save()
+                p.setClipRect(QRect(tx, ty, int(self._text.width() * t_phase),
+                                    self._text.height()))
+                p.drawPixmap(tx, ty, self._text)
+                p.restore()
 
-        p.setPen(QColor("#64748b"))
-        p.setFont(QFont("Segoe UI", 9))
-        p.drawText(QRect(0, 250, self.W, 20), Qt.AlignCenter, "Пакетный генератор отчётов")
-
-        # Полоса прогресса-«прорисовки»
-        bar = QRectF(48, 288, self.W - 96, 6)
-        p.setPen(Qt.NoPen)
-        p.fillRect(bar, QColor("#e2e8f0"))
-        fill = QRectF(bar.x(), bar.y(), bar.width() * self._progress(), bar.height())
-        fp = QPainterPath()
-        fp.addRoundedRect(fill, 3, 3)
-        p.fillPath(fp, QColor("#2563eb"))
         p.end()
 
     def finish(self):
@@ -148,7 +167,7 @@ def main():
     app = QApplication(sys.argv)
 
     # Лоадер: показывается минимум SPLASH_MS, пока окно готовится
-    SPLASH_MS = 5000
+    SPLASH_MS = 3000
     import time as _time
     splash = SplashLoader(SPLASH_MS)
     splash.show()
