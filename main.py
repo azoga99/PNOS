@@ -89,12 +89,14 @@ def _silhouette(pm: QPixmap, color: QColor) -> QPixmap:
 
 
 class SplashLoader(QWidget):
-    """Лоадер запуска: белая карточка, знак логотипа «заливается» родным
-    цветом снизу вверх, текст с иконки «пишется» рядом слева направо."""
+    """Лоадер запуска: белая вертикальная карточка — знак логотипа сверху
+    «заливается» родным цветом снизу вверх, текст с иконки снизу
+    «пишется» слева направо."""
 
-    W, H = 460, 200
+    W, H = 300, 290
     MARK_H = 132          # высота знака на лоадере
-    GAP = 14              # расстояние между знаком и текстом
+    GAP = 18              # расстояние между знаком и текстом
+    TEXT_SCALE = 0.72     # текст чуть мельче пропорционального
 
     def __init__(self, duration_ms: int = 3000):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
@@ -103,7 +105,7 @@ class SplashLoader(QWidget):
         self.setFixedSize(self.W, self.H)
         self.DURATION_MS = duration_ms
 
-        # Знак (слева): масштабируем, убираем белый фон, готовим серый силуэт
+        # Знак (сверху): масштабируем, убираем белый фон, готовим серый силуэт
         mark_img = _extract_logo_region(0.0, 0.44)
         self._mark = QPixmap()
         self._mark_gray = QPixmap()
@@ -113,11 +115,12 @@ class SplashLoader(QWidget):
             self._mark = QPixmap.fromImage(scaled)
             self._mark_gray = _silhouette(self._mark, QColor(148, 163, 184, 110))
 
-        # Текст «PNOS INDUSTRIAL SOFTWARE» (справа), высота пропорциональна знаку
+        # Текст «PNOS INDUSTRIAL SOFTWARE» (снизу), чуть мельче пропорции
         text_img = _extract_logo_region(0.44, 1.0)
         self._text = QPixmap()
         if not text_img.isNull() and mark_img.height() > 0:
-            t_h = max(24, int(self.MARK_H * text_img.height() / mark_img.height()))
+            t_h = max(20, int(self.MARK_H * self.TEXT_SCALE
+                              * text_img.height() / mark_img.height()))
             self._text = QPixmap.fromImage(_white_to_transparent(
                 text_img.scaledToHeight(t_h, Qt.SmoothTransformation)))
 
@@ -148,10 +151,11 @@ class SplashLoader(QWidget):
 
         prog = self._progress()
 
-        # Компоновка: знак + текст по центру карточки
-        total_w = self._mark.width() + (self.GAP + self._text.width() if not self._text.isNull() else 0)
-        mx = (self.W - total_w) // 2
-        my = (self.H - self._mark.height()) // 2
+        # Вертикальная компоновка: знак сверху, текст под ним, всё по центру
+        text_h = self._text.height() if not self._text.isNull() else 0
+        total_h = self._mark.height() + (self.GAP + text_h if text_h else 0)
+        my = (self.H - total_h) // 2
+        mx = (self.W - self._mark.width()) // 2
 
         if not self._mark.isNull():
             # Полупрозрачный серый силуэт знака
@@ -169,8 +173,8 @@ class SplashLoader(QWidget):
             # Текст «пишется» слева направо (с 30% до 100% времени)
             t_phase = 0.0 if prog < 0.3 else min(1.0, (prog - 0.3) / 0.7)
             if t_phase > 0:
-                tx = mx + self._mark.width() + self.GAP
-                ty = my + (self._mark.height() - self._text.height()) // 2
+                tx = (self.W - self._text.width()) // 2
+                ty = my + self._mark.height() + self.GAP
                 p.save()
                 p.setClipRect(QRect(tx, ty, int(self._text.width() * t_phase),
                                     self._text.height()))
