@@ -89,14 +89,12 @@ def _silhouette(pm: QPixmap, color: QColor) -> QPixmap:
 
 
 class SplashLoader(QWidget):
-    """Лоадер запуска: белая вертикальная карточка — знак логотипа сверху
-    «заливается» родным цветом снизу вверх, текст с иконки снизу
-    «пишется» слева направо."""
+    """Лоадер запуска (минималистичный): квадратная белая карточка,
+    по центру знак логотипа, «заливающийся» родным цветом снизу вверх."""
 
-    W, H = 300, 290
-    MARK_H = 132          # высота знака на лоадере
-    GAP = 18              # расстояние между знаком и текстом
-    TEXT_SCALE = 0.72     # текст чуть мельче пропорционального
+    W, H = 230, 230
+    CARD = 190            # сторона карточки
+    MARK_H = 110          # высота знака
 
     def __init__(self, duration_ms: int = 3000):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
@@ -105,7 +103,7 @@ class SplashLoader(QWidget):
         self.setFixedSize(self.W, self.H)
         self.DURATION_MS = duration_ms
 
-        # Знак (сверху): масштабируем, убираем белый фон, готовим серый силуэт
+        # Знак: масштабируем, убираем белый фон, готовим серый силуэт
         mark_img = _extract_logo_region(0.0, 0.44)
         self._mark = QPixmap()
         self._mark_gray = QPixmap()
@@ -114,15 +112,6 @@ class SplashLoader(QWidget):
                 mark_img.scaledToHeight(self.MARK_H, Qt.SmoothTransformation))
             self._mark = QPixmap.fromImage(scaled)
             self._mark_gray = _silhouette(self._mark, QColor(148, 163, 184, 110))
-
-        # Текст «PNOS INDUSTRIAL SOFTWARE» (снизу), чуть мельче пропорции
-        text_img = _extract_logo_region(0.44, 1.0)
-        self._text = QPixmap()
-        if not text_img.isNull() and mark_img.height() > 0:
-            t_h = max(20, int(self.MARK_H * self.TEXT_SCALE
-                              * text_img.height() / mark_img.height()))
-            self._text = QPixmap.fromImage(_white_to_transparent(
-                text_img.scaledToHeight(t_h, Qt.SmoothTransformation)))
 
         self._t = QElapsedTimer()
         self._t.start()
@@ -141,45 +130,28 @@ class SplashLoader(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
 
-        # Белая карточка со скруглением
-        card = QRectF(10, 10, self.W - 20, self.H - 20)
+        # Квадратная белая карточка со скруглением
+        cx = (self.W - self.CARD) / 2
+        cy = (self.H - self.CARD) / 2
         path = QPainterPath()
-        path.addRoundedRect(card, 20, 20)
+        path.addRoundedRect(QRectF(cx, cy, self.CARD, self.CARD), 18, 18)
         p.fillPath(path, QColor("#ffffff"))
         p.setPen(QPen(QColor("#e2e8f0"), 1))
         p.drawPath(path)
 
-        prog = self._progress()
-
-        # Вертикальная компоновка: знак сверху, текст под ним, всё по центру
-        text_h = self._text.height() if not self._text.isNull() else 0
-        total_h = self._mark.height() + (self.GAP + text_h if text_h else 0)
-        my = (self.H - total_h) // 2
-        mx = (self.W - self._mark.width()) // 2
-
         if not self._mark.isNull():
+            mx = (self.W - self._mark.width()) // 2
+            my = (self.H - self._mark.height()) // 2
             # Полупрозрачный серый силуэт знака
             p.drawPixmap(mx, my, self._mark_gray)
-            # Заливка цветом снизу вверх (первые 75% времени)
-            fill = min(1.0, prog / 0.75)
+            # Заливка цветом снизу вверх за всё время лоадера
+            fill = self._progress()
             mh = self._mark.height()
             top = int(mh * (1.0 - fill))
             p.save()
             p.setClipRect(QRect(mx, my + top, self._mark.width(), mh - top))
             p.drawPixmap(mx, my, self._mark)
             p.restore()
-
-        if not self._text.isNull():
-            # Текст «пишется» слева направо (с 30% до 100% времени)
-            t_phase = 0.0 if prog < 0.3 else min(1.0, (prog - 0.3) / 0.7)
-            if t_phase > 0:
-                tx = (self.W - self._text.width()) // 2
-                ty = my + self._mark.height() + self.GAP
-                p.save()
-                p.setClipRect(QRect(tx, ty, int(self._text.width() * t_phase),
-                                    self._text.height()))
-                p.drawPixmap(tx, ty, self._text)
-                p.restore()
 
         p.end()
 
