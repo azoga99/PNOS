@@ -289,14 +289,63 @@ Remove-Item -Path $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyConti
 """
 
 
+def _log_line(log_path: str, msg: str):
+    """Дописывает строку в лог обновления (не мешает работе при любой ошибке)."""
+    try:
+        import datetime
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S.%f}  [py] {msg}\n")
+    except Exception:
+        pass
+
+
+def _spawn_outside_job(cmdline: str, log_path: str) -> bool:
+    """Запускает командную строку так, чтобы процесс ПЕРЕЖИЛ выход приложения.
+
+    КРИТИЧНО: PyInstaller-onefile держит приложение в Windows Job Object с
+    флагом «убить все процессы при закрытии» (breakaway запрещён). Обычный
+    subprocess.Popen наследует этот Job, поэтому PowerShell-скрипт подмены
+    погибал вместе с программой в момент os._exit — обновление «не применялось,
+    оставался PNOS_update.exe». Проверено журналом Windows PowerShell: движок
+    в момент обновления даже не стартовал.
+
+    Решение: создавать процесс через WMI Win32_Process.Create — его родителем
+    становится служба WMI (WmiPrvSE), которая в наш Job не входит.
+    Возвращает True при успешном запуске вне Job.
+    """
+    try:
+        import pythoncom
+        import win32com.client
+        pythoncom.CoInitialize()
+        try:
+            wmi = win32com.client.GetObject("winmgmts:root\\cimv2")
+            startup = wmi.Get("Win32_ProcessStartup").SpawnInstance_()
+            startup.ShowWindow = 0  # SW_HIDE — без мелькания окна
+            proc_cls = wmi.Get("Win32_Process")
+            method = proc_cls.Methods_("Create")
+            params = method.InParameters.SpawnInstance_()
+            params.CommandLine = cmdline
+            params.ProcessStartupInformation = startup
+            res = proc_cls.ExecMethod_("Create", params)
+            rc = int(res.ReturnValue)
+            pid = getattr(res, "ProcessId", None)
+            _log_line(log_path, f"launcher: wmi rc={rc} pid={pid}")
+            if rc == 0:
+                return True
+        finally:
+            pythoncom.CoUninitialize()
+    except Exception as e:
+        _log_line(log_path, f"launcher: wmi failed: {e}")
+    return False
+
+
 def apply_update_and_restart(new_exe_path: str):
     """
     Запускает PowerShell-скрипт, который:
       1. Завершает текущий процесс.
-      2. Удаляет старый EXE (с повтором, пока файл не освободится).
-      3. Перемещает PNOS_update.exe на место старого.
-      4. Убеждается, что файл на месте, и запускает новую версию.
-      5. Удаляет временный .ps1 скрипт.
+      2. Сдвигает старый EXE переименованием и кладёт новый на его место.
+      3. Убеждается, что файл на месте, и запускает новую версию.
+      4. Удаляет временный .ps1 скрипт.
 
     Почему PowerShell, а не .bat:
       - .bat пишется в ASCII/cp1251, из-за чего пути с кириллицей
@@ -333,17 +382,29 @@ def apply_update_and_restart(new_exe_path: str):
     if not os.path.exists(ps_exe):
         ps_exe = "powershell.exe"
 
-    subprocess.Popen(
-        [
-            ps_exe,
-            "-ExecutionPolicy", "Bypass",
-            "-WindowStyle", "Hidden",
-            "-NonInteractive",
-            "-File", ps1_path,
-        ],
-        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
-        close_fds=True,
+    cmdline = (
+        f'"{ps_exe}" -ExecutionPolicy Bypass -WindowStyle Hidden '
+        f'-NonInteractive -File "{ps1_path}"'
     )
+
+    # Основной путь: WMI — скрипт переживает закрытие Job-объекта PyInstaller.
+    launched = _spawn_outside_job(cmdline, log_path)
+
+    if not launched:
+        # Аварийный путь: старый Popen. Внутри Job он, скорее всего, будет убит
+        # вместе с приложением, но это лучше, чем ничего (и след остаётся в логе).
+        _log_line(log_path, "launcher: fallback to Popen (may be killed by job)")
+        subprocess.Popen(
+            [
+                ps_exe,
+                "-ExecutionPolicy", "Bypass",
+                "-WindowStyle", "Hidden",
+                "-NonInteractive",
+                "-File", ps1_path,
+            ],
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            close_fds=True,
+        )
 
     # Форсированно завершаем процесс. sys.exit() внутри Qt-слота лишь бросает
     # SystemExit, который цикл событий может проглотить — тогда EXE останется
