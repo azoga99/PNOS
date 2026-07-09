@@ -89,8 +89,8 @@ def _silhouette(pm: QPixmap, color: QColor) -> QPixmap:
 
 
 class SplashLoader(QWidget):
-    """Лоадер запуска без фона: знак логотипа «заливается» родным цветом
-    снизу вверх, текст с иконки «пишется» рядом слева направо."""
+    """Лоадер запуска: белая карточка, знак логотипа «заливается» родным
+    цветом снизу вверх, текст с иконки «пишется» рядом слева направо."""
 
     W, H = 460, 200
     MARK_H = 132          # высота знака на лоадере
@@ -138,9 +138,17 @@ class SplashLoader(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
 
+        # Белая карточка со скруглением
+        card = QRectF(10, 10, self.W - 20, self.H - 20)
+        path = QPainterPath()
+        path.addRoundedRect(card, 20, 20)
+        p.fillPath(path, QColor("#ffffff"))
+        p.setPen(QPen(QColor("#e2e8f0"), 1))
+        p.drawPath(path)
+
         prog = self._progress()
 
-        # Компоновка: знак + текст по центру окна (фон полностью прозрачный)
+        # Компоновка: знак + текст по центру карточки
         total_w = self._mark.width() + (self.GAP + self._text.width() if not self._text.isNull() else 0)
         mx = (self.W - total_w) // 2
         my = (self.H - self._mark.height()) // 2
