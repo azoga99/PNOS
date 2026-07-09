@@ -56,16 +56,45 @@ def _extract_logo_region(x0_frac: float, x1_frac: float) -> QImage:
     return img.copy(QRect(minx, miny, maxx - minx, maxy - miny))
 
 
+def _white_to_transparent(img: QImage, hard: int = 244, soft: int = 228) -> QImage:
+    """Превращает белый фон вырезки в прозрачность: почти-белые пиксели
+    (min(r,g,b) >= hard) становятся полностью прозрачными, зона soft..hard —
+    плавный переход, чтобы края знака не были «рваными»."""
+    img = img.convertToFormat(QImage.Format_ARGB32)
+    for y in range(img.height()):
+        for x in range(img.width()):
+            c = img.pixelColor(x, y)
+            if c.alpha() == 0:
+                continue
+            w = min(c.red(), c.green(), c.blue())
+            if w >= hard:
+                c.setAlpha(0)
+                img.setPixelColor(x, y, c)
+            elif w >= soft:
+                c.setAlpha(int(c.alpha() * (hard - w) / (hard - soft)))
+                img.setPixelColor(x, y, c)
+    return img
+
+
+def _silhouette(pm: QPixmap, color: QColor) -> QPixmap:
+    """Одноцветный силуэт по альфа-каналу пиксмапа."""
+    out = QPixmap(pm.size())
+    out.fill(Qt.transparent)
+    p = QPainter(out)
+    p.drawPixmap(0, 0, pm)
+    p.setCompositionMode(QPainter.CompositionMode_SourceIn)
+    p.fillRect(out.rect(), color)
+    p.end()
+    return out
+
+
 class SplashLoader(QWidget):
-    """Лоадер запуска: знак логотипа «заливается» родным цветом снизу вверх,
-    а текст с иконки проявляется рядом слева направо (как будто пишется).
+    """Лоадер запуска без фона: знак логотипа «заливается» родным цветом
+    снизу вверх, текст с иконки «пишется» рядом слева направо."""
 
-    Фон вырезок из icon.png белый, поэтому карточка лоадера тоже строго
-    белая — серый grayscale-силуэт знака выглядит как незалитый контур."""
-
-    W, H = 560, 240
+    W, H = 460, 200
     MARK_H = 132          # высота знака на лоадере
-    GAP = 28              # расстояние между знаком и текстом
+    GAP = 14              # расстояние между знаком и текстом
 
     def __init__(self, duration_ms: int = 3000):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
@@ -74,23 +103,23 @@ class SplashLoader(QWidget):
         self.setFixedSize(self.W, self.H)
         self.DURATION_MS = duration_ms
 
-        # Знак (слева) — цветной и серый силуэт
+        # Знак (слева): масштабируем, убираем белый фон, готовим серый силуэт
         mark_img = _extract_logo_region(0.0, 0.44)
         self._mark = QPixmap()
         self._mark_gray = QPixmap()
         if not mark_img.isNull():
-            scaled = mark_img.scaledToHeight(self.MARK_H, Qt.SmoothTransformation)
+            scaled = _white_to_transparent(
+                mark_img.scaledToHeight(self.MARK_H, Qt.SmoothTransformation))
             self._mark = QPixmap.fromImage(scaled)
-            gray = scaled.convertToFormat(QImage.Format_Grayscale8)
-            self._mark_gray = QPixmap.fromImage(gray)
+            self._mark_gray = _silhouette(self._mark, QColor(148, 163, 184, 110))
 
         # Текст «PNOS INDUSTRIAL SOFTWARE» (справа), высота пропорциональна знаку
         text_img = _extract_logo_region(0.44, 1.0)
         self._text = QPixmap()
         if not text_img.isNull() and mark_img.height() > 0:
             t_h = max(24, int(self.MARK_H * text_img.height() / mark_img.height()))
-            self._text = QPixmap.fromImage(
-                text_img.scaledToHeight(t_h, Qt.SmoothTransformation))
+            self._text = QPixmap.fromImage(_white_to_transparent(
+                text_img.scaledToHeight(t_h, Qt.SmoothTransformation)))
 
         self._t = QElapsedTimer()
         self._t.start()
@@ -109,23 +138,15 @@ class SplashLoader(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
 
-        # Белая карточка со скруглением (фон совпадает с фоном вырезок логотипа)
-        card = QRectF(10, 10, self.W - 20, self.H - 20)
-        path = QPainterPath()
-        path.addRoundedRect(card, 20, 20)
-        p.fillPath(path, QColor("#ffffff"))
-        p.setPen(QPen(QColor("#e2e8f0"), 1))
-        p.drawPath(path)
-
         prog = self._progress()
 
-        # Компоновка: знак + текст по центру карточки
+        # Компоновка: знак + текст по центру окна (фон полностью прозрачный)
         total_w = self._mark.width() + (self.GAP + self._text.width() if not self._text.isNull() else 0)
         mx = (self.W - total_w) // 2
         my = (self.H - self._mark.height()) // 2
 
         if not self._mark.isNull():
-            # Серый силуэт знака
+            # Полупрозрачный серый силуэт знака
             p.drawPixmap(mx, my, self._mark_gray)
             # Заливка цветом снизу вверх (первые 75% времени)
             fill = min(1.0, prog / 0.75)
