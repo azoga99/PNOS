@@ -319,6 +319,29 @@ QFrame#h_divider {
     border: none;
 }
 
+/* ─── Чипы-сводка (Обзор) ──────────────────────────────────────── */
+QFrame#stat_chip {
+    background-color: @bg_panel@;
+    border: 1px solid @border@;
+    border-radius: 8px;
+}
+
+QLabel#chip_value {
+    font-size: 17px;
+    font-weight: 800;
+    color: @text_primary@;
+}
+
+QLabel#chip_value_good { font-size: 17px; font-weight: 800; color: @success@; }
+QLabel#chip_value_bad { font-size: 17px; font-weight: 800; color: @error@; }
+QLabel#chip_value_warn { font-size: 17px; font-weight: 800; color: @warn@; }
+
+QLabel#chip_caption {
+    font-size: 10px;
+    color: @text_muted@;
+    font-weight: 600;
+}
+
 /* ─── Кнопки общие ─────────────────────────────────────────────── */
 QPushButton {
     background-color: @bg_content@;
