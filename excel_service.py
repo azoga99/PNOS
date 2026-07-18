@@ -3,7 +3,14 @@
 Модуль фильтрации Excel-файла для определения пунктов отчётов.
 Фильтры: столбец E содержит "ТТП", столбец F содержит "ЭПБ", столбец H пустой.
 Номера пунктов берутся из столбца B.
+
+Также — чтение графика для страницы «Анализ пунктов»: фильтрация по
+закреплённому специалисту (CONFIG["ANALYTICS"]) и вычисление статуса
+согласования по колонкам-датам QZ/RB/RC/RE.
 """
+
+import re
+import datetime
 
 import pandas as pd
 from config import CONFIG
@@ -63,3 +70,125 @@ def analyze_excel(file_path: str, batch_size: int = None) -> tuple[int, list[str
     except Exception as e:
         print(f"Ошибка чтения Excel: {e}")
         return 0, []
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Анализ пунктов (страница «Анализ пунктов»)
+# ═══════════════════════════════════════════════════════════════════════
+
+# Лестница статусов согласования: код -> подпись в UI
+ANALYTICS_STATUS_LABELS = {
+    "in_work": "Не оформлен",
+    "done": "Оформлен, не отправлен",
+    "sent_approval": "Отправлен Шарову",
+    "approved": "Согласован Шаровым",
+    "sent_final": "Отправлен Жиганьшину",
+}
+
+_DATE_RE = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")
+
+
+def col_to_idx(letter: str) -> int:
+    """Буква колонки Excel -> 0-базный индекс ("B" -> 1, "MF" -> 343)."""
+    idx = 0
+    for ch in letter.strip().upper():
+        idx = idx * 26 + (ord(ch) - ord("A") + 1)
+    return idx - 1
+
+
+def _cell_is_date(value) -> bool:
+    """True, если в ячейке дата (datetime или строка строго ДД.ММ.ГГГГ)."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return False
+    if isinstance(value, (datetime.datetime, datetime.date, pd.Timestamp)):
+        return True
+    return bool(_DATE_RE.match(str(value).strip()))
+
+
+def _clean_point(value) -> str:
+    """Номер пункта из ячейки: "2744.0" -> "2744"; пусто/nan -> ""."""
+    s = str(value).strip()
+    if s.lower() in ("", "nan", "none", "nat"):
+        return ""
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s
+
+
+def read_analytics_rows(file_path: str) -> list[dict]:
+    """
+    Читает график целиком для страницы «Анализ пунктов».
+
+    Возвращает список словарей по каждому пункту (все специалисты сразу —
+    фильтрация по фамилии/оборудованию делается в UI без повторного чтения):
+        {"point", "equipment", "person", "status", "status_label"}
+
+    Всегда исключаются строки с пустым номером пункта и строки, где
+    колонка COL_DELETED непуста («удалённые» пункты).
+    """
+    cfg = CONFIG["ANALYTICS"]
+    letters = {
+        "point": cfg["COL_POINT"],
+        "equipment": cfg["COL_EQUIPMENT"],
+        "deleted": cfg["COL_DELETED"],
+        "person": cfg["COL_PERSON"],
+        "done": cfg["COL_DONE"],
+        "sent_approval": cfg["COL_SENT_APPROVAL"],
+        "approved": cfg["COL_APPROVED"],
+        "sent_final": cfg["COL_SENT_FINAL"],
+    }
+
+    df = pd.read_excel(
+        file_path,
+        header=None,
+        engine="openpyxl",
+        skiprows=cfg["DATA_START_ROW"] - 1,
+        usecols=",".join(letters.values()),
+        dtype=object,
+    )
+    # usecols возвращает колонки в порядке следования в файле —
+    # сопоставляем их нашим именам через сортировку по индексу колонки
+    ordered_names = [name for name, _ in
+                     sorted(letters.items(), key=lambda kv: col_to_idx(kv[1]))]
+    df.columns = ordered_names
+
+    rows = []
+    for _, r in df.iterrows():
+        point = _clean_point(r["point"])
+        if not point:
+            continue
+
+        deleted = str(r["deleted"]).strip() if r["deleted"] is not None else ""
+        if deleted and deleted.lower() not in ("nan", "none", "nat"):
+            continue  # «удалённый» пункт — не показываем никогда
+
+        has_done = _cell_is_date(r["done"])
+        has_sent = _cell_is_date(r["sent_approval"])
+        has_approved = _cell_is_date(r["approved"])
+        has_final = _cell_is_date(r["sent_final"])
+        if has_done and has_sent and has_approved and has_final:
+            status = "sent_final"
+        elif has_done and has_sent and has_approved:
+            status = "approved"
+        elif has_done and has_sent:
+            status = "sent_approval"
+        elif has_done:
+            status = "done"
+        else:
+            status = "in_work"
+
+        equipment = str(r["equipment"]).strip()
+        if equipment.lower() in ("nan", "none", "nat"):
+            equipment = ""
+        person = str(r["person"]).strip()
+        if person.lower() in ("nan", "none", "nat"):
+            person = ""
+
+        rows.append({
+            "point": point,
+            "equipment": equipment,
+            "person": person,
+            "status": status,
+            "status_label": ANALYTICS_STATUS_LABELS[status],
+        })
+    return rows

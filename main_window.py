@@ -3,20 +3,21 @@
 Главное окно приложения ПНОС — PySide6.
 
 Структура: единый конвейер из 7 карточек-шагов на странице «Процесс»,
-отдельные страницы — форма ручного контроля (шаг 3), «Обзор» (матрица
-статусов), «Итоговый отчёт» (таблицы результатов) и «Настройки».
+отдельные страницы — форма ручного контроля (шаг 3), «Обзор и отчёт»
+(матрица статусов + таблицы результатов), автономные «Правка отчётов»
+и «Анализ пунктов», а также «Настройки».
 """
 
 import os
 import sys
 import time
 
-from PySide6.QtCore import Qt, QSize, QSettings, QTimer
+from PySide6.QtCore import Qt, QSize, QSettings, QTimer, QThread, Signal
 from PySide6.QtGui import QFont, QIcon, QColor
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QProgressBar, QFrame, QLineEdit,
-    QFileDialog, QTextEdit, QMessageBox, QCheckBox,
+    QFileDialog, QTextEdit, QMessageBox, QCheckBox, QDialog,
     QSizePolicy, QApplication, QStackedWidget,
     QTableWidget, QTableWidgetItem, QHeaderView, QListWidget,
     QListWidgetItem, QScrollArea,
@@ -42,6 +43,139 @@ LOG_COLORS = {
     "error": "#ef4444",
 }
 
+# Статусы согласования на странице «Анализ пунктов».
+# Коды и подписи дублируют excel_service.ANALYTICS_STATUS_LABELS — сам модуль
+# здесь не импортируется, чтобы не тянуть pandas при старте приложения.
+AN_STATUS_LABELS = {
+    "in_work": "Не оформлен",
+    "done": "Оформлен, не отправлен",
+    "sent_approval": "Отправлен Шарову",
+    "approved": "Согласован Шаровым",
+    "sent_final": "Отправлен Жиганьшину",
+}
+AN_STATUS_COLORS = {
+    "in_work": "#94a3b8",
+    "done": "#6366f1",
+    "sent_approval": "#f59e0b",
+    "approved": "#10b981",
+    "sent_final": "#0d9488",
+}
+AN_VERDICT_COLORS = {
+    "ready": LOG_COLORS["done"],
+    "missing_critical": LOG_COLORS["warn"],
+    "empty": LOG_COLORS["error"],
+    "not_found": LOG_COLORS["error"],
+    "cancelled": LOG_COLORS["info"],
+}
+
+
+class MasterCheckWorker(QThread):
+    """Фоновая проверка доступности сводного графика при старте.
+
+    Сетевой путь (S:\\…) при недоступном сервере может отвечать десятки
+    секунд — проверять в UI-потоке нельзя.
+    """
+    result = Signal(bool, str)  # (доступен, проверенный путь)
+
+    def __init__(self, path: str, parent=None):
+        super().__init__(parent)
+        self.path = path
+
+    def run(self):
+        ok = bool(self.path) and os.path.isfile(self.path)
+        self.result.emit(ok, self.path)
+
+
+class MasterScheduleDialog(QDialog):
+    """Окно после загрузки программы: график не подтянулся с сервера.
+
+    Показывается при КАЖДОМ запуске с недоступным сервером — человек всегда
+    осознанно подтверждает, с какой копией графика работает. Прошлый ручной
+    выбор подставляется как подсказка, рядом видна дата изменения файла.
+    """
+
+    def __init__(self, missing_path: str, prefill: str = "", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Сводный график")
+        self.setModal(True)
+        self.setMinimumWidth(540)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(22, 20, 22, 18)
+        v.setSpacing(10)
+
+        lbl_head = QLabel("График не подтянулся — сервер недоступен")
+        lbl_head.setObjectName("form_field_label")
+        v.addWidget(lbl_head)
+
+        lbl_text = QLabel(
+            f"Не удалось открыть сводный график:\n"
+            f"{missing_path or '(путь не задан)'}\n\n"
+            "Выберите файл графика вручную — он будет использоваться во всех "
+            "разделах программы до её закрытия. Проверьте по дате изменения, "
+            "что это актуальная копия графика.")
+        lbl_text.setObjectName("hint")
+        lbl_text.setWordWrap(True)
+        v.addWidget(lbl_text)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.edit_path = QLineEdit()
+        self.edit_path.setPlaceholderText("Файл графика (.xlsm / .xlsx)")
+        self.edit_path.textChanged.connect(self._validate)
+        row.addWidget(self.edit_path, 1)
+        btn_browse = QPushButton("📂")
+        btn_browse.setObjectName("browse_btn")
+        btn_browse.setFixedWidth(40)
+        btn_browse.setCursor(Qt.PointingHandCursor)
+        btn_browse.clicked.connect(self._browse)
+        row.addWidget(btn_browse)
+        v.addLayout(row)
+
+        self.lbl_file_date = QLabel("")
+        self.lbl_file_date.setObjectName("hint")
+        v.addWidget(self.lbl_file_date)
+
+        btns = QHBoxLayout()
+        btns.addStretch()
+        btn_later = QPushButton("Позже")
+        btn_later.setObjectName("segment")
+        btn_later.setCursor(Qt.PointingHandCursor)
+        btn_later.clicked.connect(self.reject)
+        btns.addWidget(btn_later)
+        self.btn_ok = QPushButton("Использовать этот график")
+        self.btn_ok.setObjectName("green_button")
+        self.btn_ok.setCursor(Qt.PointingHandCursor)
+        self.btn_ok.setEnabled(False)
+        self.btn_ok.clicked.connect(self.accept)
+        btns.addWidget(self.btn_ok)
+        v.addLayout(btns)
+
+        if prefill:
+            self.edit_path.setText(prefill)  # textChanged сам вызовет _validate
+
+    def _browse(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Сводный график", "", "Excel (*.xlsm *.xlsx)")
+        if path:
+            self.edit_path.setText(os.path.normpath(path))
+
+    def _validate(self):
+        path = self.edit_path.text().strip()
+        ok = os.path.isfile(path)
+        self.btn_ok.setEnabled(ok)
+        if ok:
+            mtime = time.strftime("%d.%m.%Y %H:%M",
+                                  time.localtime(os.path.getmtime(path)))
+            self.lbl_file_date.setText(f"Файл изменён: {mtime}")
+        elif path:
+            self.lbl_file_date.setText("Файл не найден")
+        else:
+            self.lbl_file_date.setText("")
+
+    def selected_path(self) -> str:
+        return self.edit_path.text().strip()
+
 
 class MainWindow(QMainWindow):
     """Главное окно приложения ПНОС."""
@@ -51,7 +185,8 @@ class MainWindow(QMainWindow):
     PAGE_MANUAL = 1
     PAGE_OVERVIEW = 2   # объединённая страница «Обзор и отчёт»
     PAGE_FIXREPORTS = 3  # автономная «Правка отчётов» (вне конвейера)
-    PAGE_SETTINGS = 4
+    PAGE_ANALYTICS = 4   # автономный «Анализ пунктов» (вне конвейера)
+    PAGE_SETTINGS = 5
 
     # UI-шаг -> ключ статуса в .pnos_status.json (учитывает сдвиг воркеров)
     STEP_STATUS_KEYS = {1: "stage1", 2: "stage2", 3: "manual3",
@@ -100,6 +235,11 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(QIcon(resource_path(os.path.join("resources", "icon.ico"))))
         self._setup_ui()
 
+        # Проверка доступности сводного графика — после показа окна.
+        # Если серверный путь недоступен, программа сразу предложит выбрать
+        # файл вручную; выбор запоминается и используется во всех разделах.
+        QTimer.singleShot(800, self._check_master_schedule)
+
     # ═══════════════════════════════════════════════════════════════
     # Каркас интерфейса
     # ═══════════════════════════════════════════════════════════════
@@ -137,6 +277,7 @@ class MainWindow(QMainWindow):
             ("Ручной контроль", self.PAGE_MANUAL),
             ("Обзор и отчёт", self.PAGE_OVERVIEW),
             ("Правка отчётов", self.PAGE_FIXREPORTS),
+            ("Анализ пунктов", self.PAGE_ANALYTICS),
         ]
         self._nav_buttons = {}
         nav_box = QVBoxLayout()
@@ -219,6 +360,10 @@ class MainWindow(QMainWindow):
         self._setup_fixreports_page()
         self.pages_stack.addWidget(self.page_fixreports)
 
+        self.page_analytics = QWidget()
+        self._setup_analytics_page()
+        self.pages_stack.addWidget(self.page_analytics)
+
         self.page_settings = SettingsPage()
         self.pages_stack.addWidget(self.page_settings)
         self.page_settings.theme_changed.connect(self.apply_theme)
@@ -235,11 +380,60 @@ class MainWindow(QMainWindow):
             self._refresh_report_page()
         elif index == self.PAGE_MANUAL:
             self._load_manual_points()
+        elif index == self.PAGE_ANALYTICS:
+            self._an_auto_load()
 
     def _page_title(self, text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setObjectName("app_title")
         return lbl
+
+    # ═══════════════════════════════════════════════════════════════
+    # Сводный график — единый файл для шага 4 и «Анализа пунктов»
+    # ═══════════════════════════════════════════════════════════════
+
+    def _master_excel_path(self) -> str:
+        """Путь к сводному графику: из Настроек (запоминается), иначе config.py."""
+        override = self.page_settings.edit_macro_path.text().strip()
+        return override or CONFIG.get("MACRO_MASTER_WB_PATH", "")
+
+    def _check_master_schedule(self):
+        worker = MasterCheckWorker(self._master_excel_path(), parent=self)
+        worker.result.connect(self._on_master_check)
+        worker.start()
+        self._workers["master_check"] = worker
+
+    def _on_master_check(self, ok: bool, path: str):
+        self._workers.pop("master_check", None)
+        if ok:
+            # график доступен — сразу подтягиваем его в фоне;
+            # по завершении чтения появится тост (см. _an_on_rows)
+            self._an_load_schedule()
+            return
+        dlg = MasterScheduleDialog(
+            path, prefill=self._settings.value("master_excel", ""), parent=self)
+        if dlg.exec() == QDialog.Accepted:
+            # поле в Настройках действует до закрытия программы;
+            # textChanged заодно сохранит путь как подсказку на будущее
+            self.page_settings.edit_macro_path.setText(dlg.selected_path())
+            self._an_load_schedule()
+
+    def _show_toast(self, message: str, duration_ms: int = 4000):
+        """Всплывающее уведомление поверх окна; исчезает само."""
+        if getattr(self, "_toast", None) is None:
+            self._toast = QLabel("", self)
+            self._toast.setObjectName("toast")
+            self._toast.setAlignment(Qt.AlignCenter)
+            self._toast.hide()
+            self._toast_timer = QTimer(self)
+            self._toast_timer.setSingleShot(True)
+            self._toast_timer.timeout.connect(self._toast.hide)
+        self._toast.setText(message)
+        self._toast.adjustSize()
+        self._toast.move(max(0, (self.width() - self._toast.width()) // 2), 16)
+        self._toast.show()
+        self._toast.raise_()
+        self._toast_timer.start(duration_ms)
 
     # ═══════════════════════════════════════════════════════════════
     # Страница «Процесс» — конвейер шагов
@@ -1738,3 +1932,479 @@ class MainWindow(QMainWindow):
         self.fix_btn_start.setEnabled(True)
         self.fix_btn_stop.setEnabled(False)
         self._workers.pop("fixreports", None)
+
+    # ═══════════════════════════════════════════════════════════════
+    # Страница «Анализ пунктов» — статистика готовности (вне конвейера)
+    # ═══════════════════════════════════════════════════════════════
+
+    def _setup_analytics_page(self):
+        from widgets import NoWheelComboBox as QComboBox
+
+        self._an_rows = []        # все строки графика (после исключения удалённых)
+        self._an_checked = set()  # отмеченные номера пунктов
+        self._an_results = []     # результаты последнего анализа
+        self._an_updating = False  # защита от itemChanged при перестройке списка
+        self._an_loaded_path = None  # путь графика, из которого прочитаны строки
+
+        outer = QVBoxLayout(self.page_analytics)
+        outer.setContentsMargins(2, 2, 6, 2)
+        outer.setSpacing(10)
+
+        # ── Шапка: заголовок + вкладки (как на «Обзор и отчёт») ──
+        head = QHBoxLayout()
+        head.addWidget(self._page_title("Анализ пунктов"))
+        head.addStretch()
+        self.an_btn_tab_select = QPushButton("Выбор пунктов")
+        self.an_btn_tab_results = QPushButton("Результаты")
+        for b in (self.an_btn_tab_select, self.an_btn_tab_results):
+            b.setObjectName("segment")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+        self.an_btn_tab_select.setChecked(True)
+        self.an_btn_tab_select.clicked.connect(lambda: self._an_set_tab(0))
+        self.an_btn_tab_results.clicked.connect(lambda: self._an_set_tab(1))
+        head.addWidget(self.an_btn_tab_select)
+        head.addWidget(self.an_btn_tab_results)
+        outer.addLayout(head)
+
+        # ── Строка графика: файл берётся из Настроек, отдельно не выбирается ──
+        file_row = QHBoxLayout()
+        file_row.setSpacing(10)
+        self.an_lbl_file = QLabel("График ещё не прочитан")
+        self.an_lbl_file.setObjectName("hint")
+        file_row.addWidget(self.an_lbl_file, 1)
+        self.an_btn_reload = QPushButton("Перечитать график")
+        self.an_btn_reload.setObjectName("ghost_button")
+        self.an_btn_reload.setCursor(Qt.PointingHandCursor)
+        self.an_btn_reload.clicked.connect(self._an_load_schedule)
+        file_row.addWidget(self.an_btn_reload)
+        outer.addLayout(file_row)
+
+        self.an_tabs = QStackedWidget()
+        outer.addWidget(self.an_tabs, 1)
+
+        # ═══ Вкладка 0: выбор пунктов ═══
+        tab_sel = QWidget()
+        sv = QVBoxLayout(tab_sel)
+        sv.setContentsMargins(0, 0, 0, 0)
+        sv.setSpacing(8)
+
+        filters_panel = QFrame()
+        filters_panel.setObjectName("settings_panel")
+        filters = QHBoxLayout(filters_panel)
+        filters.setContentsMargins(14, 10, 14, 10)
+        filters.setSpacing(10)
+        filters.addWidget(QLabel("Специалист"))
+        self.an_cb_person = QComboBox()
+        self.an_cb_person.addItems(CONFIG["ANALYTICS"]["SPECIALISTS"])
+        self.an_cb_person.currentIndexChanged.connect(self._an_person_changed)
+        filters.addWidget(self.an_cb_person)
+        filters.addWidget(QLabel("Оборудование"))
+        self.an_cb_equipment = QComboBox()
+        self.an_cb_equipment.addItem("Все виды")
+        self.an_cb_equipment.setEnabled(False)
+        self.an_cb_equipment.currentIndexChanged.connect(self._an_refresh_list)
+        filters.addWidget(self.an_cb_equipment, 1)
+        filters.addWidget(QLabel("Статус"))
+        self.an_cb_status = QComboBox()
+        self.an_cb_status.addItem("Все статусы", "all")
+        for code, label in AN_STATUS_LABELS.items():
+            self.an_cb_status.addItem(label, code)
+        self.an_cb_status.currentIndexChanged.connect(self._an_refresh_list)
+        filters.addWidget(self.an_cb_status, 1)
+        self.an_search = QLineEdit()
+        self.an_search.setPlaceholderText("Поиск № пункта")
+        self.an_search.setFixedWidth(150)
+        self.an_search.textChanged.connect(self._an_refresh_list)
+        filters.addWidget(self.an_search)
+        sv.addWidget(filters_panel)
+
+        self.an_list = QListWidget()
+        self.an_list.setObjectName("activity_feed")
+        self.an_list.setSelectionMode(QListWidget.ExtendedSelection)
+        self.an_list.itemChanged.connect(self._an_item_changed)
+        sv.addWidget(self.an_list, 1)
+
+        sel_row = QHBoxLayout()
+        sel_row.setSpacing(6)
+        for caption, slot in (("Все", self._an_check_all),
+                              ("Отметить выделенные", self._an_check_selected),
+                              ("Снять", self._an_clear_checks)):
+            b = QPushButton(caption)
+            b.setObjectName("ghost_button")
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(slot)
+            sel_row.addWidget(b)
+        self.an_lbl_counter = QLabel(
+            "Выбрано: 0 / %d" % CONFIG["ANALYTICS"]["MAX_POINTS"])
+        self.an_lbl_counter.setObjectName("hint")
+        sel_row.addWidget(self.an_lbl_counter)
+        sel_row.addStretch()
+        self.an_btn_start = QPushButton("Проверить на Я.Диске")
+        self.an_btn_start.setObjectName("green_button")
+        self.an_btn_start.setCursor(Qt.PointingHandCursor)
+        self.an_btn_start.setEnabled(False)
+        self.an_btn_start.clicked.connect(self._an_start_scan)
+        sel_row.addWidget(self.an_btn_start)
+        sv.addLayout(sel_row)
+        self.an_tabs.addWidget(tab_sel)
+
+        # ═══ Вкладка 1: результаты ═══
+        tab_res = QWidget()
+        rv = QVBoxLayout(tab_res)
+        rv.setContentsMargins(0, 0, 0, 0)
+        rv.setSpacing(8)
+
+        chips_row = QHBoxLayout()
+        chips_row.setSpacing(8)
+        chip_total, self.an_chip_total = self._build_chip("ПРОВЕРЕНО")
+        chip_ready, self.an_chip_ready = self._build_chip("ГОТОВЫ", "chip_value_good")
+        chip_missing, self.an_chip_missing = self._build_chip("НЕ ХВАТАЕТ", "chip_value_warn")
+        chip_empty, self.an_chip_empty = self._build_chip("ПУСТЫЕ", "chip_value_bad")
+        chip_lost, self.an_chip_lost = self._build_chip("НЕ НАЙДЕНЫ", "chip_value_bad")
+        for c in (chip_total, chip_ready, chip_missing, chip_empty, chip_lost):
+            chips_row.addWidget(c)
+        chips_row.addStretch()
+        self.an_btn_export = QPushButton("Выгрузить в Word")
+        self.an_btn_export.setObjectName("segment")
+        self.an_btn_export.setCursor(Qt.PointingHandCursor)
+        self.an_btn_export.setEnabled(False)
+        self.an_btn_export.clicked.connect(self._an_export_word)
+        chips_row.addWidget(self.an_btn_export)
+        rv.addLayout(chips_row)
+
+        self._an_folder_names = CONFIG["TARGET_FOLDERS"] + CONFIG["OPTIONAL_FOLDERS"]
+        self.an_table = QTableWidget()
+        self.an_table.setColumnCount(2 + len(self._an_folder_names))
+        self.an_table.setHorizontalHeaderLabels(
+            ["Пункт"] + self._an_folder_names + ["Итог"])
+        self.an_table.verticalHeader().setVisible(False)
+        self.an_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.an_table.setSelectionMode(QTableWidget.NoSelection)
+        header = self.an_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Stretch)
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        rv.addWidget(self.an_table, 1)
+        self.an_tabs.addWidget(tab_res)
+
+        # ── Низ: статус + остановка + прогресс ──
+        bottom = QHBoxLayout()
+        bottom.setSpacing(10)
+        self.an_lbl_status = QLabel(
+            "График прочитается сам при открытии страницы.")
+        self.an_lbl_status.setObjectName("hint")
+        bottom.addWidget(self.an_lbl_status, 1)
+        self.an_btn_stop = QPushButton("Остановить")
+        self.an_btn_stop.setObjectName("segment")
+        self.an_btn_stop.setCursor(Qt.PointingHandCursor)
+        self.an_btn_stop.setEnabled(False)
+        self.an_btn_stop.clicked.connect(self._an_stop_scan)
+        bottom.addWidget(self.an_btn_stop)
+        self.an_progress = QProgressBar()
+        self.an_progress.setRange(0, 100)
+        self.an_progress.setValue(0)
+        self.an_progress.setFixedHeight(10)
+        self.an_progress.setFixedWidth(220)
+        self.an_progress.setTextVisible(False)
+        bottom.addWidget(self.an_progress)
+        outer.addLayout(bottom)
+
+    def _an_set_tab(self, index: int):
+        self.an_tabs.setCurrentIndex(index)
+        self.an_btn_tab_select.setChecked(index == 0)
+        self.an_btn_tab_results.setChecked(index == 1)
+
+    # ── Загрузка графика (единый мастер-файл, см. _master_excel_path) ──
+
+    def _an_auto_load(self):
+        """Первое открытие страницы — график читается сам, без кнопок."""
+        if self._an_rows or "an_load" in self._workers:
+            return
+        self._an_load_schedule()
+
+    def _an_load_schedule(self):
+        if "an_load" in self._workers:
+            return
+        path = self._master_excel_path()
+        if not path or not os.path.isfile(path):
+            self.an_lbl_file.setText("График не найден")
+            self._an_set_status(
+                "Не найден мастер-файл сводного графика — укажите его "
+                "на странице «Настройки»", "error")
+            return
+        self.an_lbl_file.setText(
+            f"График: {os.path.basename(path)} (мастер-файл из Настроек)")
+        self.an_btn_reload.setEnabled(False)
+        self._an_loaded_path = path
+
+        from workers.analytics_worker import ScheduleLoadWorker
+        worker = ScheduleLoadWorker(path, parent=self)
+        worker.log.connect(self._append_log)
+        worker.info.connect(self._an_set_status)
+        worker.rows_ready.connect(self._an_on_rows)
+        worker.finished_ok.connect(self._an_on_load_finished)
+        worker.start()
+        self._workers["an_load"] = worker
+
+    def _an_on_load_finished(self, success: bool):
+        self.an_btn_reload.setEnabled(True)
+        self._workers.pop("an_load", None)
+
+    def _an_on_rows(self, rows: list):
+        self._an_rows = rows
+        self._an_checked.clear()
+        self._an_fill_equipment()
+        self._an_refresh_list()
+        if rows:
+            if self._an_loaded_path == CONFIG.get("MACRO_MASTER_WB_PATH"):
+                src = "с сервера"
+            else:
+                try:
+                    mtime = time.strftime("%d.%m.%Y", time.localtime(
+                        os.path.getmtime(self._an_loaded_path)))
+                    src = f"из файла (изменён {mtime})"
+                except (OSError, TypeError):
+                    src = "из файла"
+            self._show_toast(
+                f"График успешно подтянут {src} — пунктов: {len(rows)}")
+
+    # ── Фильтры и список ──
+
+    def _an_person_rows(self) -> list:
+        """Строки графика выбранного специалиста (в порядке графика)."""
+        surname = self.an_cb_person.currentText().strip().lower()
+        return [r for r in self._an_rows if surname in r["person"].lower()]
+
+    def _an_fill_equipment(self):
+        current = self.an_cb_equipment.currentText()
+        kinds = sorted({r["equipment"] for r in self._an_person_rows()
+                        if r["equipment"]})
+        self.an_cb_equipment.blockSignals(True)
+        self.an_cb_equipment.clear()
+        self.an_cb_equipment.addItem("Все виды")
+        self.an_cb_equipment.addItems(kinds)
+        idx = self.an_cb_equipment.findText(current)
+        if idx > 0:
+            self.an_cb_equipment.setCurrentIndex(idx)
+        self.an_cb_equipment.setEnabled(bool(kinds))
+        self.an_cb_equipment.blockSignals(False)
+
+    def _an_person_changed(self):
+        self._an_fill_equipment()
+        self._an_refresh_list()
+
+    def _an_refresh_list(self):
+        equipment = self.an_cb_equipment.currentText()
+        status = self.an_cb_status.currentData()
+        search = self.an_search.text().strip().lower()
+
+        self._an_updating = True
+        self.an_list.clear()
+        for r in self._an_person_rows():
+            if equipment != "Все виды" and r["equipment"] != equipment:
+                continue
+            if status and status != "all" and r["status"] != status:
+                continue
+            if search and search not in r["point"].lower():
+                continue
+            item = QListWidgetItem(f"п.{r['point']} — {r['status_label']}")
+            item.setIcon(dot_icon(AN_STATUS_COLORS.get(r["status"], "#94a3b8")))
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if r["point"] in self._an_checked
+                               else Qt.Unchecked)
+            item.setData(Qt.UserRole, r["point"])
+            self.an_list.addItem(item)
+        self._an_updating = False
+        self._an_update_counter()
+
+    def _an_item_changed(self, item):
+        if self._an_updating:
+            return
+        point = item.data(Qt.UserRole)
+        if item.checkState() == Qt.Checked:
+            self._an_checked.add(point)
+        else:
+            self._an_checked.discard(point)
+        self._an_update_counter()
+
+    def _an_update_counter(self):
+        max_points = CONFIG["ANALYTICS"]["MAX_POINTS"]
+        n = len(self._an_checked)
+        self.an_lbl_counter.setText(f"Выбрано: {n} / {max_points}")
+        self.an_lbl_counter.setStyleSheet(
+            f"color: {LOG_COLORS['error']};" if n > max_points else "")
+        self.an_btn_start.setText(
+            f"Проверить на Я.Диске ({n})" if n else "Проверить на Я.Диске")
+        if "analytics" not in self._workers:
+            self.an_btn_start.setEnabled(0 < n <= max_points)
+
+    def _an_check_all(self):
+        max_points = CONFIG["ANALYTICS"]["MAX_POINTS"]
+        self._an_updating = True
+        checked = len(self._an_checked)
+        truncated = False
+        for i in range(self.an_list.count()):
+            item = self.an_list.item(i)
+            if item.checkState() == Qt.Checked:
+                continue
+            if checked >= max_points:
+                truncated = True
+                break
+            item.setCheckState(Qt.Checked)
+            self._an_checked.add(item.data(Qt.UserRole))
+            checked += 1
+        self._an_updating = False
+        self._an_update_counter()
+        if truncated:
+            self._an_set_status(
+                f"Отмечены первые {max_points} пунктов — больше за один анализ нельзя",
+                "warn")
+
+    def _an_check_selected(self):
+        self._an_updating = True
+        for item in self.an_list.selectedItems():
+            item.setCheckState(Qt.Checked)
+            self._an_checked.add(item.data(Qt.UserRole))
+        self._an_updating = False
+        self._an_update_counter()
+
+    def _an_clear_checks(self):
+        self._an_checked.clear()
+        self._an_updating = True
+        for i in range(self.an_list.count()):
+            self.an_list.item(i).setCheckState(Qt.Unchecked)
+        self._an_updating = False
+        self._an_update_counter()
+
+    # ── Анализ на Я.Диске ──
+
+    def _an_start_scan(self):
+        # порядок пунктов — как в графике у выбранного специалиста
+        points = [r["point"] for r in self._an_person_rows()
+                  if r["point"] in self._an_checked]
+        max_points = CONFIG["ANALYTICS"]["MAX_POINTS"]
+        if not points:
+            QMessageBox.warning(self, "Ошибка",
+                                "Отметьте хотя бы один пункт для анализа.")
+            return
+        if len(points) > max_points:
+            QMessageBox.warning(
+                self, "Ошибка",
+                f"Отмечено {len(points)} пунктов — за один анализ можно "
+                f"проверить не более {max_points}.")
+            return
+
+        self.an_btn_start.setEnabled(False)
+        self.an_btn_reload.setEnabled(False)
+        self.an_btn_stop.setEnabled(True)
+        self.an_btn_export.setEnabled(False)
+        self.an_progress.setValue(0)
+        self.an_table.setRowCount(0)
+        self._an_results = []
+
+        from workers.analytics_worker import AnalyticsWorker
+        worker = AnalyticsWorker(points, parent=self)
+        worker.log.connect(self._append_log)
+        worker.info.connect(self._an_set_status)
+        worker.progress.connect(self.an_progress.setValue)
+        worker.result_ready.connect(self._an_on_results)
+        worker.finished_ok.connect(self._an_on_scan_finished)
+        worker.start()
+        self._workers["analytics"] = worker
+
+    def _an_stop_scan(self):
+        worker = self._workers.get("analytics")
+        if worker and worker.isRunning():
+            worker.cancel()
+            self.an_btn_stop.setEnabled(False)
+            self._an_set_status("Останавливаю анализ…", "warn")
+
+    def _an_on_results(self, results: list):
+        from workers.analytics_worker import fmt_folder_cell
+        self._an_results = results
+        critical = set(CONFIG["REQUIRED_FOLDERS"])
+
+        self.an_table.setRowCount(len(results))
+        for row, res in enumerate(results):
+            self.an_table.setItem(row, 0, QTableWidgetItem(f"п.{res['point']}"))
+            for col, name in enumerate(self._an_folder_names, start=1):
+                folder = res["folders"].get(name) if res["found"] else None
+                cell = QTableWidgetItem(fmt_folder_cell(folder))
+                cell.setTextAlignment(Qt.AlignCenter)
+                if folder is None:
+                    color = LOG_COLORS["info"]
+                elif folder["items"] > 0:
+                    color = LOG_COLORS["done"]
+                elif folder["exists"]:
+                    color = LOG_COLORS["warn"]
+                else:
+                    color = (LOG_COLORS["error"] if name in critical
+                             else LOG_COLORS["info"])
+                cell.setForeground(QColor(color))
+                self.an_table.setItem(row, col, cell)
+            verdict = QTableWidgetItem(res["verdict_text"])
+            verdict.setForeground(QColor(
+                AN_VERDICT_COLORS.get(res["verdict"], LOG_COLORS["info"])))
+            self.an_table.setItem(row, len(self._an_folder_names) + 1, verdict)
+
+        self.an_chip_total.setText(str(len(results)))
+        self.an_chip_ready.setText(
+            str(sum(1 for r in results if r["verdict"] == "ready")))
+        self.an_chip_missing.setText(
+            str(sum(1 for r in results if r["verdict"] == "missing_critical")))
+        self.an_chip_empty.setText(
+            str(sum(1 for r in results if r["verdict"] == "empty")))
+        self.an_chip_lost.setText(
+            str(sum(1 for r in results if r["verdict"] == "not_found")))
+        self.an_btn_export.setEnabled(bool(results))
+        self._an_set_tab(1)
+
+    def _an_on_scan_finished(self, success: bool):
+        self.an_btn_reload.setEnabled(True)
+        self.an_btn_stop.setEnabled(False)
+        self._workers.pop("analytics", None)
+        self._an_update_counter()  # вернёт кнопку запуска в актуальное состояние
+
+    # ── Выгрузка в Word ──
+
+    def _an_export_word(self):
+        if not self._an_results:
+            return
+        person = self.an_cb_person.currentText()
+        equipment = self.an_cb_equipment.currentText()
+        if equipment == "Все виды":
+            equipment = ""
+        default_dir = os.path.dirname(self._an_loaded_path or "") or ""
+        default_name = os.path.join(
+            default_dir,
+            f"Анализ пунктов {person} {time.strftime('%d.%m.%Y')}.docx")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Сохранить анализ", default_name, "Word (*.docx)")
+        if not path:
+            return
+        try:
+            from workers.analytics_worker import export_analysis_word
+            export_analysis_word(os.path.normpath(path), self._an_results,
+                                 person, equipment)
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка",
+                                f"Не удалось сохранить документ:\n{e}")
+            return
+        self._an_set_status(f"Документ сохранён: {os.path.basename(path)}", "done")
+        answer = QMessageBox.question(
+            self, "Готово", "Документ сохранён. Открыть его?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if answer == QMessageBox.Yes:
+            try:
+                os.startfile(path)
+            except OSError:
+                pass
+
+    def _an_set_status(self, message: str, category: str = "info"):
+        self.an_lbl_status.setText(message)
+        if category in ("warn", "error"):
+            self.an_lbl_status.setStyleSheet(f"color: {LOG_COLORS[category]};")
+        else:
+            self.an_lbl_status.setStyleSheet("")
+        if category == "error":
+            self._log_error(f"[Анализ пунктов] {message}")

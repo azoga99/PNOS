@@ -56,6 +56,10 @@ class SettingsPage(QWidget):
         macro_box = QHBoxLayout()
         self.edit_macro_path = QLineEdit()
         self.edit_macro_path.setPlaceholderText("Оставьте пустым для использования пути из config.py")
+        # Поле действует до закрытия программы: при каждом запуске сначала
+        # пробуется серверный график (он всегда актуальный). Последний ручной
+        # выбор сохраняется только как подсказка для диалога при старте.
+        self.edit_macro_path.textChanged.connect(self._save_master_prefill)
         btn_browse_macro = QPushButton("📂 Выбрать")
         btn_browse_macro.setFixedWidth(110)
         btn_browse_macro.setCursor(Qt.PointingHandCursor)
@@ -64,7 +68,10 @@ class SettingsPage(QWidget):
         macro_box.addWidget(btn_browse_macro)
         g_paths_layout.addLayout(macro_box)
 
-        lbl_macro_hint = QLabel("Укажите путь к «ПНОС сводный график Перечни ЭПБ на 2026г.xlsm»")
+        lbl_macro_hint = QLabel("Укажите путь к «ПНОС сводный график Перечни ЭПБ на 2026г.xlsm». "
+                                "Действует до закрытия программы: при запуске всегда используется "
+                                "серверный график, а если сервер недоступен — программа сама "
+                                "предложит выбрать файл.")
         lbl_macro_hint.setObjectName("hint")
         lbl_macro_hint.setWordWrap(True)
         g_paths_layout.addWidget(lbl_macro_hint)
@@ -200,6 +207,13 @@ class SettingsPage(QWidget):
         self.btn_theme_dark.setChecked(name == "dark")
         self._settings.setValue("theme", name)
         self.theme_changed.emit(name)
+
+    def _save_master_prefill(self, text: str):
+        """Запоминает последний непустой путь графика — как подсказку
+        для диалога выбора при недоступном сервере (не как активный путь)."""
+        text = text.strip()
+        if text:
+            self._settings.setValue("master_excel", text)
 
     def _browse_macro_path(self):
         """Выбор файла макроса."""

@@ -780,3 +780,14 @@ QLabel#form_title {
     color: @text_primary@;
 }
 
+
+/* ═══ Всплывающее уведомление (тост) ═══ */
+QLabel#toast {
+    background-color: @bg_panel@;
+    color: @text_primary@;
+    border: 1px solid @success_strong@;
+    border-radius: 8px;
+    padding: 10px 20px;
+    font-size: 13px;
+    font-weight: 600;
+}
