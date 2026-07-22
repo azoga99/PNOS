@@ -131,6 +131,40 @@ class RepairScanWorker(QThread):
             self.finished_ok.emit(False)
 
 
+class RepairVerifyWorker(QThread):
+    """Верификация пункта (этап Э2): только чтение, без COM."""
+
+    log = Signal(str)
+    info = Signal(str, str)
+    finished_ok = Signal(bool)
+    result = Signal(list)            # list[Finding]
+
+    def __init__(self, point_folder: str, parent=None):
+        super().__init__(parent)
+        self.point_folder = point_folder
+
+    def run(self):
+        try:
+            from repair.verifier import verify_point
+            findings = verify_point(self.point_folder)
+            self.result.emit(findings)
+            n_err = sum(1 for f in findings if f.level == "error")
+            n_warn = sum(1 for f in findings if f.level == "warn")
+            if n_err:
+                self.info.emit(f"Верификация: ошибок {n_err}, "
+                               f"предупреждений {n_warn}", "error")
+            elif n_warn:
+                self.info.emit(f"Верификация: предупреждений {n_warn}", "warn")
+            else:
+                self.info.emit("Верификация: пункт согласован", "done")
+            self.finished_ok.emit(True)
+        except Exception as e:
+            import traceback
+            self.log.emit(traceback.format_exc())
+            self.info.emit(f"Ошибка верификации: {str(e)[:80]}", "error")
+            self.finished_ok.emit(False)
+
+
 class RepairApplyWorker(QThread):
     """Применение согласованных изменений (COM Excel + python-docx Word)."""
 

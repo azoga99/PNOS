@@ -88,11 +88,20 @@ class RepairPage(QWidget):
         self.btn_scan.setCursor(Qt.PointingHandCursor)
         self.btn_scan.clicked.connect(self._start_scan)
         g.addWidget(self.btn_scan, 0, 3)
+        self.btn_verify = QPushButton("Верификация")
+        self.btn_verify.setObjectName("segment")
+        self.btn_verify.setCursor(Qt.PointingHandCursor)
+        self.btn_verify.setToolTip(
+            "Проверка согласованности пункта (реестр ↔ отчёт, зеркальность "
+            "листов «Импорт», #REF!, задвижки в таблице 3). Работает для "
+            "любого пункта — и сделанного вручную.")
+        self.btn_verify.clicked.connect(self._verify)
+        g.addWidget(self.btn_verify, 0, 4)
         self.btn_rollback = QPushButton("Откатить последнюю")
         self.btn_rollback.setObjectName("segment")
         self.btn_rollback.setCursor(Qt.PointingHandCursor)
         self.btn_rollback.clicked.connect(self._rollback)
-        g.addWidget(self.btn_rollback, 0, 4)
+        g.addWidget(self.btn_rollback, 0, 5)
         outer.addWidget(panel)
 
         # ── Вкладки ──
@@ -494,6 +503,26 @@ class RepairPage(QWidget):
         if ok:
             self._log("Готово. Повторное сканирование пункта...", "done")
             self._start_scan()
+
+    def _verify(self):
+        folder = self._point_folder()
+        if not os.path.isdir(folder):
+            self._log("Укажите папку пункта", "error")
+            return
+        from workers.repair_worker import RepairVerifyWorker
+        self.btn_verify.setEnabled(False)
+        w = RepairVerifyWorker(folder, parent=self)
+        w.log.connect(lambda m: self._log(m, "info"))
+        w.info.connect(self._log)
+        w.result.connect(self._on_verified)
+        w.finished_ok.connect(lambda ok: self.btn_verify.setEnabled(True))
+        self._workers["verify"] = w
+        w.start()
+
+    def _on_verified(self, findings):
+        cat = {"ok": "done", "warn": "warn", "error": "error"}
+        for f in findings:
+            self._log(f"[{f.code} {f.where}] {f.message}", cat.get(f.level, "info"))
 
     def _rollback(self):
         folder = self._point_folder()
