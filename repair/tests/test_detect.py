@@ -115,3 +115,60 @@ def test_find_repair_docs_fuzzy_folder_name(tmp_path):
 def test_dedupe_keeps_order():
     acts = ["222-1-84", "222-1-309", "222-1-84", " 222-1-309 "]
     assert dedupe_acts(acts) == ["222-1-84", "222-1-309"]
+
+
+# ─── Предзаполнение реестра из документов ─────────────────────────────
+
+from repair.detect import build_records_from_docs, RepairDocs
+from repair.model import ID_PRESENT, ID_EXPECTED
+
+
+def test_prefill_2701_two_ids():
+    """п.2701: два комплекта ИД → две записи «есть», по акту в каждой."""
+    docs = RepairDocs(has_repair=True, act_files=[], id_files=[
+        r"C:\x\Исполнительная\36-30, №6, 222-1-84.pdf",
+        r"C:\x\Исполнительная\36-30, №6, 222-1-309.pdf",
+    ])
+    recs = build_records_from_docs(docs)
+    assert len(recs) == 2
+    assert all(r.id_status == ID_PRESENT for r in recs)
+    assert [r.acts[0].number for r in recs] == ["222-1-84", "222-1-309"]
+    assert recs[0].date_done == ""              # дату сдачи впишет сотрудник
+
+
+def test_prefill_2775_one_id_two_acts():
+    """п.2775: ИД на оба акта + отдельные чёткие акты → ОДНА запись,
+    даты актов подтянуты из имён файлов актов, файлы приложены."""
+    docs = RepairDocs(has_repair=True, act_files=[
+        r"C:\x\Акт отбраковки\222-1-121 №122 39-40 24.03.2026.pdf",
+        r"C:\x\Акт отбраковки\222-1-143 № 122 39-40 30.03.2026.pdf",
+    ], id_files=[
+        r"C:\x\Исполнительная\ИД по Акту ОТН №222-1-143,121. Линия №122.pdf",
+    ])
+    recs = build_records_from_docs(docs)
+    assert len(recs) == 1
+    rec = recs[0]
+    assert rec.id_status == ID_PRESENT
+    got = {a.number: a.date for a in rec.acts}
+    assert got == {"222-1-143": "30.03.2026", "222-1-121": "24.03.2026"}
+    assert len(rec.source_files) == 3           # ИД + оба акта
+
+
+def test_prefill_act_only():
+    docs = RepairDocs(has_repair=True, act_files=[
+        r"C:\x\Акт отбраковки\222-1-121 №122 39-40 24.03.2026.pdf",
+    ], id_files=[])
+    recs = build_records_from_docs(docs)
+    assert len(recs) == 1
+    assert recs[0].id_status == ID_EXPECTED
+    assert recs[0].acts[0].date == "24.03.2026"
+
+
+def test_prefill_unparsed_name_kept():
+    """Нечитаемое имя не теряется — пустая запись-заготовка с файлом."""
+    docs = RepairDocs(has_repair=True,
+                      act_files=[r"C:\x\Акт отбраковки\скан 001.pdf"], id_files=[])
+    recs = build_records_from_docs(docs)
+    assert len(recs) == 1
+    assert recs[0].acts == []
+    assert recs[0].source_files == ["скан 001.pdf"]

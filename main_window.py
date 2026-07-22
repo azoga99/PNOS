@@ -27,6 +27,7 @@ from config import CONFIG
 from utils import resource_path, title_date_text, find_order_scan
 from version import APP_VERSION
 from pages.settings_page import SettingsPage
+from pages.repair_page import RepairPage
 from widgets import StepCard, dot_icon, STATUS_COLORS
 # Воркеры этапов импортируются лениво (внутри методов запуска),
 # чтобы не тянуть pandas / aiohttp / win32com / python-docx при старте.
@@ -186,7 +187,8 @@ class MainWindow(QMainWindow):
     PAGE_OVERVIEW = 2   # объединённая страница «Обзор и отчёт»
     PAGE_FIXREPORTS = 3  # автономная «Правка отчётов» (вне конвейера)
     PAGE_ANALYTICS = 4   # автономный «Анализ пунктов» (вне конвейера)
-    PAGE_SETTINGS = 5
+    PAGE_REPAIR = 5      # автономный «Ремонт» (вне конвейера; ветка repair-module)
+    PAGE_SETTINGS = 6
 
     # UI-шаг -> ключ статуса в .pnos_status.json (учитывает сдвиг воркеров)
     STEP_STATUS_KEYS = {1: "stage1", 2: "stage2", 3: "manual3",
@@ -278,6 +280,7 @@ class MainWindow(QMainWindow):
             ("Обзор и отчёт", self.PAGE_OVERVIEW),
             ("Правка отчётов", self.PAGE_FIXREPORTS),
             ("Анализ пунктов", self.PAGE_ANALYTICS),
+            ("Ремонт", self.PAGE_REPAIR),
         ]
         self._nav_buttons = {}
         nav_box = QVBoxLayout()
@@ -363,6 +366,9 @@ class MainWindow(QMainWindow):
         self.page_analytics = QWidget()
         self._setup_analytics_page()
         self.pages_stack.addWidget(self.page_analytics)
+
+        self.page_repair = RepairPage()
+        self.pages_stack.addWidget(self.page_repair)
 
         self.page_settings = SettingsPage()
         self.pages_stack.addWidget(self.page_settings)

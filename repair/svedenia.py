@@ -24,6 +24,8 @@ from repair.model import RepairRecord
 
 
 def _act_text(act, sv) -> str:
+    if not act.date.strip():
+        return sv["ACT_NO_DATE"].format(num=act.number)
     return sv["ACT"].format(date=act.date, num=act.number)
 
 

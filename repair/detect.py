@@ -166,6 +166,58 @@ def find_repair_docs(point_folder: str, config: dict | None = None) -> RepairDoc
     return docs
 
 
+def build_records_from_docs(docs: RepairDocs) -> list["RepairRecord"]:
+    """
+    Предзаполнить реестр ремонтов из обнаруженных документов (по именам
+    файлов). Правила:
+      - каждый файл ИД → своя запись (статус «есть»; дату сдачи сотрудник
+        впишет с превью реестра ИД — из имени файла её не взять);
+      - отдельный файл акта с номером, уже входящим в какую-то ИД, —
+        прикладывается к той записи (дедупликация, дата акта из имени);
+      - акт без ИД → своя запись со статусом «ожидается».
+    Всё это только черновик для формы — сотрудник правит и подтверждает.
+    """
+    from repair.model import ActRef, RepairRecord, ID_PRESENT, ID_EXPECTED
+
+    records: list[RepairRecord] = []
+    act_index: dict[str, ActRef] = {}   # номер акта → его ActRef в записях
+
+    for f in docs.id_files:
+        p = parse_doc_filename(f)
+        rec = RepairRecord(id_status=ID_PRESENT,
+                           source_files=[os.path.basename(f)])
+        for num in dedupe_acts(p.acts):
+            ref = ActRef(number=num, date="")
+            rec.acts.append(ref)
+            act_index.setdefault(num, ref)
+        records.append(rec)
+
+    for f in docs.act_files:
+        p = parse_doc_filename(f)
+        nums = dedupe_acts(p.acts)
+        if not nums:
+            # имя не разобралось — пустая запись-заготовка с файлом
+            records.append(RepairRecord(id_status=ID_EXPECTED,
+                                        source_files=[os.path.basename(f)]))
+            continue
+        for num in nums:
+            if num in act_index:
+                # копия акта из ИД: дополняем дату акта, файл — к той записи
+                ref = act_index[num]
+                if p.date and not ref.date:
+                    ref.date = p.date
+                for rec in records:
+                    if ref in rec.acts and os.path.basename(f) not in rec.source_files:
+                        rec.source_files.append(os.path.basename(f))
+            else:
+                ref = ActRef(number=num, date=p.date)
+                act_index[num] = ref
+                records.append(RepairRecord(
+                    id_status=ID_EXPECTED, acts=[ref],
+                    source_files=[os.path.basename(f)]))
+    return records
+
+
 def dedupe_acts(act_numbers: list[str]) -> list[str]:
     """
     Дедупликация номеров актов с сохранением порядка: отдельный файл акта

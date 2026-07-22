@@ -1,0 +1,533 @@
+# -*- coding: utf-8 -*-
+"""
+Страница «Ремонт» — автономный модуль (ветка repair-module, этап Э1).
+
+Поток: выбор папки пункта → «Проверить пункт» (фоновое сканирование: детекция
+документов, светофор привязки, реестр, сечения) → правка реестра → отметка
+заменённых сечений (колонка «Новый номинал») → предпросмотр «было → станет»
+с галочками → «Применить» (бэкап → Excel COM → Word → журнал; при ошибке
+автооткат) / «Выгрузить чек-лист» (ручной путь) / «Откатить последнюю».
+
+Страница ничего не пишет без предпросмотра и явной кнопки (принцип П-2);
+все данные живут в обычных файлах пункта (П-1). Тяжёлые модули импортируются
+лениво — быстрый старт приложения не страдает.
+"""
+
+from __future__ import annotations
+
+import os
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame, QLabel,
+    QLineEdit, QPushButton, QFileDialog, QListWidget, QListWidgetItem,
+    QTableWidget, QTableWidgetItem, QTabWidget, QHeaderView, QAbstractItemView,
+)
+
+from widgets import dot_icon
+
+_DOT = {
+    "info": "#4A90D9", "done": "#4CAF50", "wait": "#FF9800",
+    "warn": "#FF9800", "error": "#F44336",
+}
+_VERDICT = {"ok": ("done", "совпадает с пунктом"),
+            "mismatch": ("error", "похоже, документ другого пункта"),
+            "unknown": ("warn", "в имени данных нет — проверьте по превью")}
+
+CHECKLIST_NAME = "_чек-лист_ремонта.txt"
+
+
+class RepairPage(QWidget):
+    """Автономная страница модуля «Ремонт»."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._workers = {}
+        self._scan: dict = {}          # результат RepairScanWorker
+        self._preview = None           # (ops_by_change, changes, svedenia)
+        self._build_ui()
+
+    # ═══════════════════════════════════ UI ═══════════════════════════
+
+    def _build_ui(self):
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(2, 2, 6, 2)
+        outer.setSpacing(10)
+
+        title = QLabel("Ремонт")
+        title.setObjectName("app_title")
+        outer.addWidget(title)
+        sub = QLabel(
+            "Учёт ремонтов трубопровода: акты отбраковки и исполнительная "
+            "документация → лист «Ремонт», номиналы заменённых сечений на "
+            "листах «Импорт», строка «Сведения о ремонте» в отчёте. "
+            "Ничего не записывается без предпросмотра; перед каждой записью "
+            "создаётся бэкап, доступен откат.")
+        sub.setObjectName("hint")
+        sub.setWordWrap(True)
+        outer.addWidget(sub)
+
+        # ── Выбор пункта ──
+        panel = QFrame()
+        panel.setObjectName("settings_panel")
+        g = QGridLayout(panel)
+        g.setContentsMargins(14, 12, 14, 12)
+        g.setHorizontalSpacing(10)
+        g.addWidget(QLabel("Папка пункта"), 0, 0)
+        self.edit_folder = QLineEdit()
+        self.edit_folder.setPlaceholderText("Папка пункта п.NNNN")
+        g.addWidget(self.edit_folder, 0, 1)
+        btn_browse = QPushButton("📂")
+        btn_browse.setObjectName("browse_btn")
+        btn_browse.setFixedWidth(40)
+        btn_browse.setCursor(Qt.PointingHandCursor)
+        btn_browse.clicked.connect(self._browse)
+        g.addWidget(btn_browse, 0, 2)
+        self.btn_scan = QPushButton("Проверить пункт")
+        self.btn_scan.setObjectName("green_button")
+        self.btn_scan.setCursor(Qt.PointingHandCursor)
+        self.btn_scan.clicked.connect(self._start_scan)
+        g.addWidget(self.btn_scan, 0, 3)
+        self.btn_rollback = QPushButton("Откатить последнюю")
+        self.btn_rollback.setObjectName("segment")
+        self.btn_rollback.setCursor(Qt.PointingHandCursor)
+        self.btn_rollback.clicked.connect(self._rollback)
+        g.addWidget(self.btn_rollback, 0, 4)
+        outer.addWidget(panel)
+
+        # ── Вкладки ──
+        self.tabs = QTabWidget()
+        outer.addWidget(self.tabs, 1)
+
+        # Вкладка 1: документы и реестр
+        tab_docs = QWidget()
+        v1 = QVBoxLayout(tab_docs)
+        v1.setSpacing(6)
+        lbl_docs = QLabel("Документы ремонта")
+        lbl_docs.setObjectName("section_label")
+        v1.addWidget(lbl_docs)
+        self.list_docs = QListWidget()
+        self.list_docs.setObjectName("activity_feed")
+        self.list_docs.setMaximumHeight(120)
+        v1.addWidget(self.list_docs)
+        lbl_reg = QLabel("Реестр ремонтов (лист «Ремонт»; запись = комплект ИД)")
+        lbl_reg.setObjectName("section_label")
+        v1.addWidget(lbl_reg)
+        self.tbl_registry = QTableWidget(0, 8)
+        self.tbl_registry.setHorizontalHeaderLabels(
+            ["Статус ИД", "Дата выполнения", "Номера актов", "Даты актов",
+             "Замена", "Материал", "Файлы", "Примечание"])
+        self.tbl_registry.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.tbl_registry.horizontalHeader().setStretchLastSection(True)
+        self.tbl_registry.verticalHeader().setVisible(False)
+        v1.addWidget(self.tbl_registry, 1)
+        row1 = QHBoxLayout()
+        for text, slot in (("Добавить запись", self._reg_add),
+                           ("Удалить запись", self._reg_del),
+                           ("Заполнить из документов", self._reg_prefill)):
+            b = QPushButton(text)
+            b.setObjectName("segment")
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(slot)
+            row1.addWidget(b)
+        row1.addStretch()
+        hint1 = QLabel("Статус ИД: есть / ожидается / не будет. Даты — ДД.ММ.ГГГГ; "
+                       "дата акта — из грифа УТВЕРЖДАЮ, не с титульника.")
+        hint1.setObjectName("hint")
+        row1.addWidget(hint1)
+        v1.addLayout(row1)
+        self.tabs.addTab(tab_docs, "Документы и реестр")
+
+        # Вкладка 2: сечения
+        tab_sec = QWidget()
+        v2 = QVBoxLayout(tab_sec)
+        v2.setSpacing(6)
+        hint2 = QLabel(
+            "Отметьте заменённые сечения: впишите номинал новой трубы в колонку "
+            "«Новый номинал» (например 10 или 8.0; для перехода — «12 / 10»). "
+            "Пустая ячейка = сечение не менялось. Задвижки и бобышки по правилам "
+            "не обновляются — при необходимости впишите номинал явно.")
+        hint2.setObjectName("hint")
+        hint2.setWordWrap(True)
+        v2.addWidget(hint2)
+        self.tbl_sections = QTableWidget(0, 7)
+        self.tbl_sections.setHorizontalHeaderLabels(
+            ["Сечение", "Элемент", "Тисп", "Диам", "Замеры", "Мин",
+             "Новый номинал"])
+        self.tbl_sections.verticalHeader().setVisible(False)
+        self.tbl_sections.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.tbl_sections.horizontalHeader().setStretchLastSection(True)
+        v2.addWidget(self.tbl_sections, 1)
+        self.tabs.addTab(tab_sec, "Сечения")
+
+        # Вкладка 3: предпросмотр
+        tab_prev = QWidget()
+        v3 = QVBoxLayout(tab_prev)
+        v3.setSpacing(6)
+        self.lbl_sved = QLabel("")
+        self.lbl_sved.setObjectName("hint")
+        self.lbl_sved.setWordWrap(True)
+        v3.addWidget(self.lbl_sved)
+        self.tbl_preview = QTableWidget(0, 4)
+        self.tbl_preview.setHorizontalHeaderLabels(["✓", "Где", "Было", "Станет"])
+        self.tbl_preview.verticalHeader().setVisible(False)
+        self.tbl_preview.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        hdr = self.tbl_preview.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(3, QHeaderView.Stretch)
+        v3.addWidget(self.tbl_preview, 1)
+        row3 = QHBoxLayout()
+        self.btn_apply = QPushButton("Применить выбранное")
+        self.btn_apply.setObjectName("green_button")
+        self.btn_apply.setCursor(Qt.PointingHandCursor)
+        self.btn_apply.setEnabled(False)
+        self.btn_apply.clicked.connect(self._apply)
+        row3.addWidget(self.btn_apply)
+        self.btn_checklist = QPushButton("Выгрузить чек-лист")
+        self.btn_checklist.setObjectName("segment")
+        self.btn_checklist.setCursor(Qt.PointingHandCursor)
+        self.btn_checklist.setEnabled(False)
+        self.btn_checklist.clicked.connect(self._export_checklist)
+        row3.addWidget(self.btn_checklist)
+        row3.addStretch()
+        v3.addLayout(row3)
+        self.tabs.addTab(tab_prev, "Предпросмотр")
+
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+
+        # ── Журнал страницы ──
+        lbl_log = QLabel("Журнал")
+        lbl_log.setObjectName("section_label")
+        outer.addWidget(lbl_log)
+        self.log_list = QListWidget()
+        self.log_list.setObjectName("activity_feed")
+        self.log_list.setMaximumHeight(110)
+        outer.addWidget(self.log_list)
+
+    # ═════════════════════════════ Помощники ═══════════════════════════
+
+    def _log(self, message: str, category: str = "info"):
+        item = QListWidgetItem(message)
+        item.setIcon(dot_icon(_DOT.get(category, _DOT["info"])))
+        self.log_list.addItem(item)
+        self.log_list.scrollToBottom()
+
+    def _browse(self):
+        folder = QFileDialog.getExistingDirectory(self, "Папка пункта")
+        if folder:
+            self.edit_folder.setText(os.path.normpath(folder))
+
+    def _point_folder(self) -> str:
+        return self.edit_folder.text().strip()
+
+    # ═════════════════════════════ Сканирование ════════════════════════
+
+    def _start_scan(self):
+        folder = self._point_folder()
+        if not os.path.isdir(folder):
+            self._log("Укажите существующую папку пункта", "error")
+            return
+        from workers.repair_worker import RepairScanWorker
+        self.btn_scan.setEnabled(False)
+        w = RepairScanWorker(folder, parent=self)
+        w.log.connect(lambda m: self._log(m, "info"))
+        w.info.connect(self._log)
+        w.result.connect(self._on_scan)
+        w.finished_ok.connect(lambda ok: self.btn_scan.setEnabled(True))
+        self._workers["scan"] = w
+        w.start()
+
+    def _on_scan(self, res: dict):
+        self._scan = res
+        self._preview = None
+        docs = res.get("docs")
+
+        self.list_docs.clear()
+        if not docs or not docs.has_repair:
+            item = QListWidgetItem("Документов ремонта нет — у пункта состояние "
+                                   "«ремонт не проводился»")
+            item.setIcon(dot_icon(_DOT["info"]))
+            self.list_docs.addItem(item)
+            self.tbl_registry.setRowCount(0)
+            self.tbl_sections.setRowCount(0)
+            self._refresh_preview()
+            return
+
+        unit, line = res.get("unit", ""), res.get("line", "")
+        for f, parsed, verdict in res.get("verdicts", []):
+            cat, note = _VERDICT[verdict]
+            extra = []
+            if parsed.acts:
+                extra.append("акт " + ", ".join(parsed.acts))
+            if parsed.date:
+                extra.append(parsed.date)
+            text = f"{os.path.basename(f)} — {note}"
+            if extra:
+                text += f" ({'; '.join(extra)})"
+            item = QListWidgetItem(text)
+            item.setIcon(dot_icon(_DOT[cat]))
+            item.setToolTip(f)
+            self.list_docs.addItem(item)
+        if unit or line:
+            self._log(f"Карточка пункта: установка {unit or '—'}, "
+                      f"трубопровод № {line or '—'}", "info")
+
+        src = "лист «Ремонт»" if res.get("registry_existed") else "имена документов (черновик)"
+        self._log(f"Реестр: {src}, записей {len(res.get('records', []))}", "info")
+        self._fill_registry(res.get("records", []))
+        self._fill_sections(res.get("sections", []))
+        self._refresh_preview()
+
+    # ═════════════════════════════ Реестр ══════════════════════════════
+
+    def _fill_registry(self, records):
+        from repair.registry import records_to_rows
+        rows = records_to_rows(records)
+        self.tbl_registry.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            for c, val in enumerate(row[1:]):        # без колонки «№»
+                self.tbl_registry.setItem(r, c, QTableWidgetItem(val))
+
+    def _registry_records(self):
+        from repair.registry import rows_to_records
+        rows = []
+        for r in range(self.tbl_registry.rowCount()):
+            row = [str(r + 1)]
+            for c in range(8):
+                it = self.tbl_registry.item(r, c)
+                row.append(it.text() if it else "")
+            rows.append(row)
+        return rows_to_records(rows)
+
+    def _reg_add(self):
+        self.tbl_registry.insertRow(self.tbl_registry.rowCount())
+
+    def _reg_del(self):
+        r = self.tbl_registry.currentRow()
+        if r >= 0:
+            self.tbl_registry.removeRow(r)
+
+    def _reg_prefill(self):
+        docs = self._scan.get("docs")
+        if not docs:
+            self._log("Сначала «Проверить пункт»", "warn")
+            return
+        from repair.detect import build_records_from_docs
+        self._fill_registry(build_records_from_docs(docs))
+        self._log("Реестр заполнен из документов заново (черновик)", "info")
+
+    # ═════════════════════════════ Сечения ═════════════════════════════
+
+    def _fill_sections(self, sections):
+        self.tbl_sections.setRowCount(len(sections))
+        for r, s in enumerate(sections):
+            vals = [str(s.number), s.element, s.thickness_nom, s.diameter,
+                    " / ".join(m for m in s.measures if m), s.tmin, ""]
+            for c, val in enumerate(vals):
+                it = QTableWidgetItem(val)
+                if c < 6:
+                    it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                self.tbl_sections.setItem(r, c, it)
+            # строка листа — в данных первой ячейки
+            self.tbl_sections.item(r, 0).setData(Qt.UserRole, s.row)
+
+    def _collect_nominals(self):
+        """Из колонки «Новый номинал» → ({row: float}, {row: (толщ, диам)}, ошибки)."""
+        rows: dict[int, float] = {}
+        perehod: dict[int, tuple] = {}
+        errors: list[str] = []
+        secs = {s.row: s for s in self._scan.get("sections", [])}
+        for r in range(self.tbl_sections.rowCount()):
+            it = self.tbl_sections.item(r, 6)
+            text = (it.text().strip() if it else "")
+            if not text:
+                continue
+            sheet_row = self.tbl_sections.item(r, 0).data(Qt.UserRole)
+            sec = secs.get(sheet_row)
+            num = self.tbl_sections.item(r, 0).text()
+            if "/" in text:
+                # переход: «12 / 10» — толщина текстом, номинал = первое число
+                try:
+                    first = float(text.split("/")[0].replace(",", "."))
+                except ValueError:
+                    errors.append(f"сечение {num}: не разобрано «{text}»")
+                    continue
+                rows[sheet_row] = first
+                diam = sec.diameter if sec else ""
+                perehod[sheet_row] = (text, diam)
+            else:
+                try:
+                    rows[sheet_row] = float(text.replace(",", "."))
+                except ValueError:
+                    errors.append(f"сечение {num}: не разобрано «{text}»")
+        return rows, perehod, errors
+
+    # ═════════════════════════════ Предпросмотр ════════════════════════
+
+    def _on_tab_changed(self, index: int):
+        if self.tabs.tabText(index) == "Предпросмотр":
+            self._refresh_preview()
+
+    def _refresh_preview(self):
+        from repair.nominals import apply_nominals
+        from repair.imports import build_write_ops
+        from repair.svedenia import build_svedenia
+
+        self.tbl_preview.setRowCount(0)
+        self._preview = None
+        self.btn_apply.setEnabled(False)
+        self.btn_checklist.setEnabled(False)
+
+        sections = self._scan.get("sections", [])
+        if not self._scan or not self._scan.get("docs") \
+                or not self._scan["docs"].has_repair:
+            self.lbl_sved.setText("")
+            return
+
+        records = self._registry_records()
+        svedenia = build_svedenia(records)
+        now = self._scan.get("svedenia_now")
+        self.lbl_sved.setText(
+            f"Строка «Сведения о ремонте»\nБыло: {now or '(не найдена)'}\n"
+            f"Станет: {svedenia}")
+
+        rows, perehod, errors = self._collect_nominals()
+        for e in errors:
+            self._log(e, "error")
+        new, changes = apply_nominals(sections, rows, perehod, by_row=True)
+
+        # операции, сгруппированные по строке листа — для согласования с галочками
+        ops_all = build_write_ops(sections, new)
+        ops_by_row = {}
+        for op in ops_all:
+            ops_by_row.setdefault(op.row, []).append(op)
+
+        self.tbl_preview.setRowCount(len(changes) + 1)
+        # строка 0 — Word
+        chk = QTableWidgetItem()
+        chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+        chk.setCheckState(Qt.Checked)
+        self.tbl_preview.setItem(0, 0, chk)
+        self.tbl_preview.setItem(0, 1, QTableWidgetItem("Word · таблица 1"))
+        self.tbl_preview.setItem(0, 2, QTableWidgetItem(now or "(не найдена)"))
+        self.tbl_preview.setItem(0, 3, QTableWidgetItem(svedenia))
+
+        for i, ch in enumerate(changes, start=1):
+            chk = QTableWidgetItem()
+            chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            chk.setCheckState(Qt.Checked)
+            self.tbl_preview.setItem(i, 0, chk)
+            self.tbl_preview.setItem(i, 1, QTableWidgetItem(f"Импорт · {ch.where}"))
+            self.tbl_preview.setItem(i, 2, QTableWidgetItem(ch.before))
+            self.tbl_preview.setItem(i, 3, QTableWidgetItem(ch.after))
+
+        # сопоставление галочка → операции: по номеру строки листа
+        sheet_rows_in_order = [s.row for s in new if s.row in rows]
+        self._preview = {
+            "records": records,
+            "svedenia": svedenia,
+            "ops_by_row": ops_by_row,
+            "sheet_rows_in_order": sheet_rows_in_order,
+            "changes": changes,
+        }
+        has_any = bool(changes) or bool(records)
+        self.btn_apply.setEnabled(has_any)
+        self.btn_checklist.setEnabled(has_any)
+
+    def _gather_enabled(self):
+        """Считать галочки предпросмотра → (ops, svedenia_or_None)."""
+        p = self._preview or {}
+        if not p:
+            return [], None
+        sved = None
+        it = self.tbl_preview.item(0, 0)
+        if it is not None and it.checkState() == Qt.Checked:
+            sved = p["svedenia"]
+        ops = []
+        order = p["sheet_rows_in_order"]
+        for i, sheet_row in enumerate(order, start=1):
+            it = self.tbl_preview.item(i, 0)
+            if it is not None and it.checkState() == Qt.Checked:
+                ops.extend(p["ops_by_row"].get(sheet_row, []))
+        return ops, sved
+
+    # ═════════════════════════════ Применение ══════════════════════════
+
+    def _apply(self):
+        folder = self._point_folder()
+        xlsm = self._scan.get("xlsm")
+        if not xlsm:
+            self._log("В пункте не найден ПНОС_ТТП.xlsm", "error")
+            return
+        self._refresh_preview_keep_checks()
+        ops, sved = self._gather_enabled()
+        records = (self._preview or {}).get("records", [])
+        if not ops and sved is None:
+            self._log("Нечего применять: все галочки сняты", "warn")
+            return
+
+        from workers.repair_worker import RepairApplyWorker
+        self.btn_apply.setEnabled(False)
+        w = RepairApplyWorker(folder, xlsm, self._scan.get("report"),
+                              ops, records, sved, parent=self)
+        w.log.connect(lambda m: self._log(m, "info"))
+        w.info.connect(self._log)
+        w.finished_ok.connect(self._on_applied)
+        self._workers["apply"] = w
+        w.start()
+
+    def _refresh_preview_keep_checks(self):
+        """Перед применением пересобрать операции, сохранив снятые галочки."""
+        states = [self.tbl_preview.item(r, 0).checkState()
+                  for r in range(self.tbl_preview.rowCount())
+                  if self.tbl_preview.item(r, 0)]
+        self._refresh_preview()
+        for r, st in enumerate(states[:self.tbl_preview.rowCount()]):
+            it = self.tbl_preview.item(r, 0)
+            if it is not None:
+                it.setCheckState(st)
+
+    def _on_applied(self, ok: bool):
+        self.btn_apply.setEnabled(True)
+        if ok:
+            self._log("Готово. Повторное сканирование пункта...", "done")
+            self._start_scan()
+
+    def _rollback(self):
+        folder = self._point_folder()
+        if not os.path.isdir(folder):
+            self._log("Укажите папку пункта", "error")
+            return
+        from repair.safety import latest_backup, restore_backup, append_journal
+        b = latest_backup(folder)
+        if not b:
+            self._log("Бэкапов у пункта нет", "warn")
+            return
+        restored = restore_backup(b, folder)
+        append_journal(folder, "Откат по кнопке",
+                       [f"восстановлено файлов: {len(restored)}",
+                        f"бэкап: {b}"])
+        self._log(f"Откат из {os.path.basename(b)}: восстановлено "
+                  f"{len(restored)} файла(ов)", "done")
+        self._start_scan()
+
+    def _export_checklist(self):
+        folder = self._point_folder()
+        p = self._preview or {}
+        if not p:
+            return
+        lines = ["ЧЕК-ЛИСТ РУЧНОЙ ПРАВКИ (модуль «Ремонт»)", ""]
+        lines.append("1. Строка «Сведения о ремонте» (таблица 1 отчёта):")
+        lines.append(f"   {p['svedenia']}")
+        lines.append("")
+        lines.append("2. Листы «Импорт» и «Импорт (ПР)» (одинаково):")
+        for ch in p["changes"]:
+            lines.append(f"   {ch.where}: {ch.before}  →  {ch.after}")
+        lines.append("")
+        lines.append("3. Коррозионная карта: те же сечения → номинал.")
+        path = os.path.join(folder, CHECKLIST_NAME)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        self._log(f"Чек-лист сохранён: {os.path.basename(path)}", "done")

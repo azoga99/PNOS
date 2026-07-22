@@ -79,6 +79,14 @@ def test_c1_acts_only():
     assert got == BASE + ": 01.02.2026 г. Акт ревизии и отбраковки трубопровода № 222-1-5"
 
 
+def test_act_without_date_omits_date_part():
+    """Дата акта ещё не внесена (черновик) — « г.» с пустой датой не пишется."""
+    rec = RepairRecord(id_status=ID_EXPECTED, acts=[ActRef("222-1-5")])
+    got = build_svedenia([rec])
+    assert got == BASE + ": Акт ревизии и отбраковки трубопровода № 222-1-5"
+    assert " г. Акт" not in got
+
+
 def test_c2_one_id():
     rec = RepairRecord(id_status=ID_PRESENT, date_done="10.04.2026",
                        acts=[ActRef("222-1-5", "01.02.2026")])
