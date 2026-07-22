@@ -98,6 +98,10 @@ class RepairPage(QWidget):
         self._map_arr = None           # numpy-массив с правками
         self._map_edits: list = []     # [(label_xy, donor_xy, описание)]
         self._map_pending = None       # первый клик пары (label_xy)
+        # состояние превью документа (вкладка 1)
+        self._doc_path: str | None = None
+        self._doc_page_idx = 0
+        self._doc_pages = 0
         self._build_ui()
 
     # ═══════════════════════════════════ UI ═══════════════════════════
@@ -165,13 +169,48 @@ class RepairPage(QWidget):
         tab_docs = QWidget()
         v1 = QVBoxLayout(tab_docs)
         v1.setSpacing(6)
-        lbl_docs = QLabel("Документы ремонта")
+        lbl_docs = QLabel("Документы ремонта — клик по документу открывает "
+                          "превью страниц справа")
         lbl_docs.setObjectName("section_label")
         v1.addWidget(lbl_docs)
+
+        docs_row = QHBoxLayout()
+        docs_row.setSpacing(8)
+        left_col = QVBoxLayout()
         self.list_docs = QListWidget()
         self.list_docs.setObjectName("activity_feed")
-        self.list_docs.setMaximumHeight(120)
-        v1.addWidget(self.list_docs)
+        self.list_docs.currentItemChanged.connect(self._doc_selected)
+        left_col.addWidget(self.list_docs, 1)
+        docs_row.addLayout(left_col, 1)
+
+        prev_col = QVBoxLayout()
+        prev_col.setSpacing(4)
+        self.doc_view = MapView()
+        self.doc_view.setMinimumWidth(300)
+        prev_col.addWidget(self.doc_view, 1)
+        nav = QHBoxLayout()
+        self.btn_pg_prev = QPushButton("◀")
+        self.btn_pg_prev.setObjectName("segment")
+        self.btn_pg_prev.setFixedWidth(36)
+        self.btn_pg_prev.clicked.connect(lambda: self._doc_page(-1))
+        nav.addWidget(self.btn_pg_prev)
+        self.lbl_pg = QLabel("—")
+        self.lbl_pg.setObjectName("hint")
+        self.lbl_pg.setAlignment(Qt.AlignCenter)
+        nav.addWidget(self.lbl_pg, 1)
+        self.btn_pg_next = QPushButton("▶")
+        self.btn_pg_next.setObjectName("segment")
+        self.btn_pg_next.setFixedWidth(36)
+        self.btn_pg_next.clicked.connect(lambda: self._doc_page(1))
+        nav.addWidget(self.btn_pg_next)
+        btn_open = QPushButton("Открыть файл")
+        btn_open.setObjectName("segment")
+        btn_open.setCursor(Qt.PointingHandCursor)
+        btn_open.clicked.connect(self._doc_open_external)
+        nav.addWidget(btn_open)
+        prev_col.addLayout(nav)
+        docs_row.addLayout(prev_col, 1)
+        v1.addLayout(docs_row, 1)
         lbl_reg = QLabel("Реестр ремонтов (лист «Ремонт»; запись = комплект ИД)")
         lbl_reg.setObjectName("section_label")
         v1.addWidget(lbl_reg)
@@ -403,6 +442,46 @@ class RepairPage(QWidget):
         self._fill_registry(res.get("records", []))
         self._fill_sections(res.get("sections", []))
         self._refresh_preview()
+
+    # ═════════════════════════ Превью документа ════════════════════════
+
+    def _doc_selected(self, current, _previous=None):
+        if current is None:
+            return
+        path = current.toolTip()
+        if not path or not os.path.isfile(path):
+            return
+        try:
+            from repair.pdf_preview import page_count
+            self._doc_path = path
+            self._doc_pages = page_count(path)
+            self._doc_page_idx = 0
+            self._doc_show()
+        except Exception as e:
+            self._log(f"Превью не открылось: {e}", "error")
+
+    def _doc_page(self, delta: int):
+        if not self._doc_path:
+            return
+        idx = self._doc_page_idx + delta
+        if 0 <= idx < self._doc_pages:
+            self._doc_page_idx = idx
+            self._doc_show()
+
+    def _doc_show(self):
+        from repair.pdf_preview import render_page
+        arr = render_page(self._doc_path, self._doc_page_idx)
+        self.doc_view._fitted = False
+        self.doc_view.set_image(self._np_to_qimage(arr))
+        self.lbl_pg.setText(
+            f"стр. {self._doc_page_idx + 1} / {self._doc_pages} · "
+            f"{os.path.basename(self._doc_path)[:40]}")
+        self.btn_pg_prev.setEnabled(self._doc_page_idx > 0)
+        self.btn_pg_next.setEnabled(self._doc_page_idx < self._doc_pages - 1)
+
+    def _doc_open_external(self):
+        if self._doc_path and os.path.isfile(self._doc_path):
+            os.startfile(self._doc_path)
 
     # ═════════════════════════════ Реестр ══════════════════════════════
 
