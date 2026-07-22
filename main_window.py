@@ -1040,11 +1040,59 @@ class MainWindow(QMainWindow):
             "Количество листов (B55)", f["sheets"], required=False,
             note="Лист уведомления Ростехнадзора не учитывается."))
 
+        # ── Раздел «Ремонт» (появляется у пунктов с ремонтом) ──
+        self.manual_repair_banner = QFrame()
+        self.manual_repair_banner.setObjectName("settings_panel")
+        rb = QHBoxLayout(self.manual_repair_banner)
+        rb.setContentsMargins(14, 10, 14, 10)
+        lbl_rep = QLabel("У этого пункта есть ремонт (акты отбраковки / "
+                         "исполнительная). Внесите данные ремонта — они "
+                         "запишутся вместе с паспортом.")
+        lbl_rep.setObjectName("hint")
+        lbl_rep.setWordWrap(True)
+        rb.addWidget(lbl_rep, 1)
+        self.manual_btn_repair = QPushButton("Внести данные по ремонту")
+        self.manual_btn_repair.setObjectName("card_button")
+        self.manual_btn_repair.setCursor(Qt.PointingHandCursor)
+        self.manual_btn_repair.clicked.connect(self._open_repair_for_current)
+        rb.addWidget(self.manual_btn_repair, 0)
+        form.addWidget(self.manual_repair_banner)
+        self.manual_repair_banner.setVisible(False)
+
         form.addStretch()
         self.manual_fields = f
         form_scroll.setWidget(form_card)
         split.addWidget(form_scroll, 1)
-        outer.addLayout(split, 1)
+
+        # Обычный вид (список + форма) и полноширинный вид ремонта — во
+        # внутреннем стеке, чтобы ремонт открывался на всю ширину.
+        normal_view = QWidget()
+        nv = QVBoxLayout(normal_view)
+        nv.setContentsMargins(0, 0, 0, 0)
+        nv.addLayout(split, 1)
+
+        repair_view = QWidget()
+        rv = QVBoxLayout(repair_view)
+        rv.setContentsMargins(0, 0, 0, 0)
+        rv.setSpacing(6)
+        rvh = QHBoxLayout()
+        btn_rep_back = QPushButton("← Назад к паспорту")
+        btn_rep_back.setObjectName("ghost_button")
+        btn_rep_back.setCursor(Qt.PointingHandCursor)
+        btn_rep_back.clicked.connect(self._close_repair_view)
+        rvh.addWidget(btn_rep_back, 0, Qt.AlignLeft)
+        self.manual_repair_title = QLabel("")
+        self.manual_repair_title.setObjectName("form_title")
+        rvh.addWidget(self.manual_repair_title, 1)
+        rv.addLayout(rvh)
+        self.manual_repair_panel = RepairPage()
+        self.manual_repair_panel.set_embedded(True)
+        rv.addWidget(self.manual_repair_panel, 1)
+
+        self.manual_stack = QStackedWidget()
+        self.manual_stack.addWidget(normal_view)     # индекс 0
+        self.manual_stack.addWidget(repair_view)     # индекс 1
+        outer.addWidget(self.manual_stack, 1)
 
         # Кнопки действий
         btn_row = QHBoxLayout()
@@ -1101,6 +1149,8 @@ class MainWindow(QMainWindow):
 
     def _load_manual_points(self):
         self._refresh_form_choices()
+        if hasattr(self, "manual_stack"):
+            self.manual_stack.setCurrentIndex(0)   # всегда возвращаемся к списку
         points = self._scan_points()
         self.manual_point_list.blockSignals(True)
         self.manual_point_list.clear()
@@ -1110,10 +1160,17 @@ class MainWindow(QMainWindow):
         for pt in points:
             folder = os.path.join(self._get_local_root(), pt["name"])
             _, state = self._manual_point_state(folder, pt)
-            item = QListWidgetItem(pt["name"])
+            label = pt["name"]
+            has_repair = not pt["invalid"] and self._point_has_repair(folder)
+            if has_repair:
+                label += "   • ремонт"
+            item = QListWidgetItem(label)
             item.setIcon(dot_icon(state_colors.get(state, STATUS_COLORS["idle"]), 12))
             item.setData(Qt.UserRole, folder)
             item.setData(Qt.UserRole + 1, state)
+            if has_repair:
+                item.setToolTip("У пункта есть документы ремонта — при "
+                                "заполнении внесите данные ремонта")
             if pt["invalid"]:
                 item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
             self.manual_point_list.addItem(item)
@@ -1187,11 +1244,31 @@ class MainWindow(QMainWindow):
         self.manual_current = folder
         self._load_form_for(folder)
 
+    def _point_has_repair(self, folder) -> bool:
+        try:
+            from repair.detect import find_repair_docs
+            return find_repair_docs(folder).has_repair
+        except Exception:
+            return False
+
+    def _open_repair_for_current(self):
+        folder = self.manual_current
+        if not folder:
+            return
+        self.manual_repair_title.setText(
+            f"Ремонт · пункт {os.path.basename(folder)}")
+        self.manual_repair_panel.load_point(folder)
+        self.manual_stack.setCurrentIndex(1)
+
+    def _close_repair_view(self):
+        self.manual_stack.setCurrentIndex(0)
+
     def _load_form_for(self, folder):
         from status_manager import get_status_value
         self._manual_loading = True
         try:
             self.manual_form_title.setText(f"Пункт {os.path.basename(folder)}")
+            self.manual_repair_banner.setVisible(self._point_has_repair(folder))
             if folder in self.manual_drafts:
                 values = self.manual_drafts[folder]
             else:
@@ -1213,6 +1290,7 @@ class MainWindow(QMainWindow):
         self._manual_loading = True
         try:
             self.manual_form_title.setText("Выберите пункт слева")
+            self.manual_repair_banner.setVisible(False)
             f = self.manual_fields
             prefix = CONFIG["MANUAL_FORM"].get("PURPOSE_PREFIX", "транспортировки ")
             f["purpose"].setText(prefix)

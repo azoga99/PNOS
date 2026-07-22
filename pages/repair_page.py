@@ -111,9 +111,13 @@ class RepairPage(QWidget):
         outer.setContentsMargins(2, 2, 6, 2)
         outer.setSpacing(10)
 
+        self._header = QWidget()
+        head = QVBoxLayout(self._header)
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(6)
         title = QLabel("Ремонт")
         title.setObjectName("app_title")
-        outer.addWidget(title)
+        head.addWidget(title)
         sub = QLabel(
             "Учёт ремонтов трубопровода: акты отбраковки и исполнительная "
             "документация → лист «Ремонт», номиналы заменённых сечений на "
@@ -122,7 +126,8 @@ class RepairPage(QWidget):
             "создаётся бэкап, доступен откат.")
         sub.setObjectName("hint")
         sub.setWordWrap(True)
-        outer.addWidget(sub)
+        head.addWidget(sub)
+        outer.addWidget(self._header)
 
         # ── Выбор пункта ──
         panel = QFrame()
@@ -159,6 +164,7 @@ class RepairPage(QWidget):
         self.btn_rollback.setCursor(Qt.PointingHandCursor)
         self.btn_rollback.clicked.connect(self._rollback)
         g.addWidget(self.btn_rollback, 0, 5)
+        self._panel = panel
         outer.addWidget(panel)
 
         # ── Вкладки ──
@@ -391,6 +397,17 @@ class RepairPage(QWidget):
         folder = QFileDialog.getExistingDirectory(self, "Папка пункта")
         if folder:
             self.edit_folder.setText(os.path.normpath(folder))
+
+    def set_embedded(self, embedded: bool = True):
+        """Встроенный режим (внутри «Ручного контроля»): скрыть заголовок и
+        панель выбора пункта — пунктом управляет host через load_point()."""
+        self._header.setVisible(not embedded)
+        self._panel.setVisible(not embedded)
+
+    def load_point(self, folder: str):
+        """Загрузить пункт и сразу просканировать (для host-страницы)."""
+        self.edit_folder.setText(os.path.normpath(folder))
+        self._start_scan()
 
     def _point_folder(self) -> str:
         return self.edit_folder.text().strip()
