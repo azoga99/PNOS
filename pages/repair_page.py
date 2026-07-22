@@ -17,14 +17,61 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal, QPointF
+from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame, QLabel,
     QLineEdit, QPushButton, QFileDialog, QListWidget, QListWidgetItem,
     QTableWidget, QTableWidgetItem, QTabWidget, QHeaderView, QAbstractItemView,
+    QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
 )
 
 from widgets import dot_icon
+
+
+class MapView(QGraphicsView):
+    """Просмотр коррозионной карты: зум колесом, панорама перетаскиванием,
+    клик (без движения мыши) отдаёт координаты пикселя изображения."""
+
+    clicked = Signal(float, float)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._scene = QGraphicsScene(self)
+        self.setScene(self._scene)
+        self._pix_item: QGraphicsPixmapItem | None = None
+        self._press_pos = None
+        self._fitted = False
+        self.setDragMode(QGraphicsView.ScrollHandDrag)
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+
+    def set_image(self, qimage: QImage):
+        self._scene.clear()
+        self._pix_item = self._scene.addPixmap(QPixmap.fromImage(qimage))
+        self._scene.setSceneRect(self._pix_item.boundingRect())
+        if not self._fitted:
+            self.fitInView(self._pix_item, Qt.KeepAspectRatio)
+            self._fitted = True
+
+    def wheelEvent(self, event):
+        factor = 1.2 if event.angleDelta().y() > 0 else 1 / 1.2
+        self.scale(factor, factor)
+
+    def mousePressEvent(self, event):
+        self._press_pos = event.position()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if self._press_pos is None or self._pix_item is None:
+            return
+        moved = (event.position() - self._press_pos).manhattanLength()
+        self._press_pos = None
+        if moved > 6:
+            return                      # это была панорама, не клик
+        scene_pos: QPointF = self.mapToScene(event.position().toPoint())
+        if self._pix_item.boundingRect().contains(scene_pos):
+            self.clicked.emit(scene_pos.x(), scene_pos.y())
 
 _DOT = {
     "info": "#4A90D9", "done": "#4CAF50", "wait": "#FF9800",
@@ -45,6 +92,12 @@ class RepairPage(QWidget):
         self._workers = {}
         self._scan: dict = {}          # результат RepairScanWorker
         self._preview = None           # (ops_by_change, changes, svedenia)
+        # состояние вкладки «Карта»
+        self._map_path: str | None = None
+        self._map_orig = None          # numpy-массив исходной карты
+        self._map_arr = None           # numpy-массив с правками
+        self._map_edits: list = []     # [(label_xy, donor_xy, описание)]
+        self._map_pending = None       # первый клик пары (label_xy)
         self._build_ui()
 
     # ═══════════════════════════════════ UI ═══════════════════════════
@@ -203,6 +256,68 @@ class RepairPage(QWidget):
         row3.addStretch()
         v3.addLayout(row3)
         self.tabs.addTab(tab_prev, "Предпросмотр")
+
+        # Вкладка 4: карта
+        tab_map = QWidget()
+        v4 = QHBoxLayout(tab_map)
+        v4.setSpacing(8)
+        self.map_view = MapView()
+        self.map_view.clicked.connect(self._on_map_clicked)
+        v4.addWidget(self.map_view, 1)
+
+        side = QVBoxLayout()
+        side.setSpacing(6)
+        self.lbl_map_status = QLabel("Карта не загружена")
+        self.lbl_map_status.setObjectName("form_field_label")
+        self.lbl_map_status.setWordWrap(True)
+        self.lbl_map_status.setMaximumWidth(260)
+        side.addWidget(self.lbl_map_status)
+        hint4 = QLabel(
+            "Правка «в два клика»: 1) кликните по подписи заменённого сечения; "
+            "2) кликните по подписи-донору, где уже написано нужное значение. "
+            "Стираются только красные пиксели, линии не страдают; глифы "
+            "копируются с этой же карты — шрифт совпадает идеально. "
+            "Колесо — зум, перетаскивание — панорама.")
+        hint4.setObjectName("hint")
+        hint4.setWordWrap(True)
+        hint4.setMaximumWidth(260)
+        side.addWidget(hint4)
+
+        self.btn_map_load = QPushButton("Загрузить карту")
+        self.btn_map_load.setObjectName("segment")
+        self.btn_map_load.setCursor(Qt.PointingHandCursor)
+        self.btn_map_load.clicked.connect(self._map_load)
+        side.addWidget(self.btn_map_load)
+
+        lbl_ba = QLabel("До / после")
+        lbl_ba.setObjectName("section_label")
+        side.addWidget(lbl_ba)
+        self.lbl_map_before = QLabel("—")
+        self.lbl_map_before.setMaximumWidth(260)
+        side.addWidget(self.lbl_map_before)
+        self.lbl_map_after = QLabel("—")
+        self.lbl_map_after.setMaximumWidth(260)
+        side.addWidget(self.lbl_map_after)
+
+        self.list_map_edits = QListWidget()
+        self.list_map_edits.setObjectName("activity_feed")
+        self.list_map_edits.setMaximumWidth(260)
+        side.addWidget(self.list_map_edits, 1)
+
+        self.btn_map_undo = QPushButton("Отменить последнюю правку")
+        self.btn_map_undo.setObjectName("segment")
+        self.btn_map_undo.setCursor(Qt.PointingHandCursor)
+        self.btn_map_undo.setEnabled(False)
+        self.btn_map_undo.clicked.connect(self._map_undo)
+        side.addWidget(self.btn_map_undo)
+        self.btn_map_save = QPushButton("Сохранить карту (с бэкапом)")
+        self.btn_map_save.setObjectName("green_button")
+        self.btn_map_save.setCursor(Qt.PointingHandCursor)
+        self.btn_map_save.setEnabled(False)
+        self.btn_map_save.clicked.connect(self._map_save)
+        side.addWidget(self.btn_map_save)
+        v4.addLayout(side)
+        self.tabs.addTab(tab_map, "Карта")
 
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
@@ -541,6 +656,150 @@ class RepairPage(QWidget):
         self._log(f"Откат из {os.path.basename(b)}: восстановлено "
                   f"{len(restored)} файла(ов)", "done")
         self._start_scan()
+
+    # ═════════════════════════════ Карта ══════════════════════════════
+
+    @staticmethod
+    def _find_map_path(folder: str) -> str | None:
+        """Рабочая карта пункта: Первичка/NNNN.png (оригинал ОТН «NNNN..png»
+        не трогается никогда)."""
+        import re
+        from repair.detect import _find_subfolder
+        perv = _find_subfolder(folder, "Первичка")
+        if not perv:
+            return None
+        m = re.search(r"(\d+)", os.path.basename(folder))
+        num = m.group(1) if m else None
+        cands = []
+        for f in sorted(os.listdir(perv)):
+            if not f.lower().endswith(".png") or f.lower().endswith("..png"):
+                continue
+            p = os.path.join(perv, f)
+            if num and os.path.splitext(f)[0] == num:
+                return p
+            cands.append(p)
+        return cands[0] if cands else None
+
+    @staticmethod
+    def _np_to_qimage(arr) -> QImage:
+        import numpy as np
+        a = np.ascontiguousarray(arr)
+        h, w = a.shape[:2]
+        return QImage(a.data, w, h, 3 * w, QImage.Format_RGB888).copy()
+
+    def _map_load(self):
+        folder = self._point_folder()
+        if not os.path.isdir(folder):
+            self._log("Укажите папку пункта", "error")
+            return
+        path = self._find_map_path(folder)
+        if not path:
+            self._log("Рабочая карта (Первичка/NNNN.png) не найдена", "error")
+            return
+        import numpy as np
+        from PIL import Image
+        self._map_path = path
+        self._map_orig = np.array(Image.open(path).convert("RGB"))
+        self._map_arr = self._map_orig.copy()
+        self._map_edits = []
+        self._map_pending = None
+        self.list_map_edits.clear()
+        self.map_view._fitted = False
+        self.map_view.set_image(self._np_to_qimage(self._map_arr))
+        self.btn_map_undo.setEnabled(False)
+        self.btn_map_save.setEnabled(False)
+        self.lbl_map_status.setText(
+            f"{os.path.basename(path)} · кликните по подписи заменённого сечения")
+        self._log(f"Карта загружена: {os.path.basename(path)}", "info")
+
+    def _crop_pixmap(self, arr, bbox, pad=30) -> QPixmap:
+        h, w = arr.shape[:2]
+        crop = arr[max(0, bbox.y1 - pad):min(h, bbox.y2 + pad),
+                   max(0, bbox.x1 - pad):min(w, bbox.x2 + pad)]
+        pm = QPixmap.fromImage(self._np_to_qimage(crop))
+        return pm.scaledToWidth(250, Qt.SmoothTransformation) \
+            if pm.width() > 250 else pm
+
+    def _on_map_clicked(self, x: float, y: float):
+        if self._map_arr is None:
+            return
+        xy = (int(x), int(y))
+        if self._map_pending is None:
+            self._map_pending = xy
+            self.lbl_map_status.setText(
+                "Теперь кликните по подписи-донору с нужным значением "
+                "(или ещё раз по той же — отмена)")
+            return
+        label_xy, donor_xy = self._map_pending, xy
+        self._map_pending = None
+        if abs(label_xy[0] - donor_xy[0]) < 5 and abs(label_xy[1] - donor_xy[1]) < 5:
+            self.lbl_map_status.setText("Отменено. Кликните по подписи сечения")
+            return
+        self._map_apply_pair(label_xy, donor_xy)
+
+    def _map_apply_pair(self, label_xy, donor_xy):
+        from repair.map_editor import replace_value
+        before = self._map_arr.copy()
+        try:
+            rep = replace_value(self._map_arr, label_xy, donor_xy)
+        except ValueError as e:
+            self._map_arr = before
+            self._log(f"Карта: {e}", "error")
+            self.lbl_map_status.setText(f"Не получилось: {e}. "
+                                        f"Кликните по подписи сечения")
+            return
+        lb = rep["label"]
+        self._map_edits.append((label_xy, donor_xy))
+        self.lbl_map_before.setPixmap(self._crop_pixmap(self._map_orig, lb))
+        self.lbl_map_after.setPixmap(self._crop_pixmap(self._map_arr, lb))
+        item = QListWidgetItem(
+            f"правка {len(self._map_edits)}: стёрто {rep['erased_px']} px, "
+            f"вставлено {rep['copied_px']} px")
+        item.setIcon(dot_icon(_DOT["done"]))
+        self.list_map_edits.addItem(item)
+        self.map_view.set_image(self._np_to_qimage(self._map_arr))
+        self.btn_map_undo.setEnabled(True)
+        self.btn_map_save.setEnabled(True)
+        self.lbl_map_status.setText(
+            f"Правок: {len(self._map_edits)}. Проверьте «до/после» и "
+            f"кликните по следующей подписи или сохраните карту")
+
+    def _map_undo(self):
+        if not self._map_edits:
+            return
+        from repair.map_editor import replace_value
+        self._map_edits.pop()
+        self.list_map_edits.takeItem(self.list_map_edits.count() - 1)
+        self._map_arr = self._map_orig.copy()
+        for label_xy, donor_xy in self._map_edits:
+            try:
+                replace_value(self._map_arr, label_xy, donor_xy)
+            except ValueError:
+                pass
+        self.map_view.set_image(self._np_to_qimage(self._map_arr))
+        self.btn_map_undo.setEnabled(bool(self._map_edits))
+        self.btn_map_save.setEnabled(bool(self._map_edits))
+        self._log("Последняя правка карты отменена", "info")
+
+    def _map_save(self):
+        if self._map_arr is None or not self._map_path:
+            return
+        from PIL import Image
+        from repair.safety import make_backup, append_journal
+        folder = self._point_folder()
+        b = make_backup(folder, [self._map_path])
+        Image.fromarray(self._map_arr).save(self._map_path)
+        append_journal(folder, "Правка коррозионной карты",
+                       [f"файл: {os.path.basename(self._map_path)}",
+                        f"правок: {len(self._map_edits)}",
+                        f"бэкап: {b}"])
+        self._log(f"Карта сохранена ({len(self._map_edits)} правок), "
+                  f"бэкап и журнал созданы", "done")
+        self._map_orig = self._map_arr.copy()
+        self._map_edits = []
+        self.list_map_edits.clear()
+        self.btn_map_undo.setEnabled(False)
+        self.btn_map_save.setEnabled(False)
 
     def _export_checklist(self):
         folder = self._point_folder()
