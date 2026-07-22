@@ -208,6 +208,16 @@ class RepairPage(QWidget):
         btn_open.setCursor(Qt.PointingHandCursor)
         btn_open.clicked.connect(self._doc_open_external)
         nav.addWidget(btn_open)
+        self.btn_ocr = QPushButton("Распознать (OCR)")
+        self.btn_ocr.setObjectName("segment")
+        self.btn_ocr.setCursor(Qt.PointingHandCursor)
+        self.btn_ocr.setToolTip(
+            "Windows OCR по первым страницам документа: номера и даты актов, "
+            "материал, типоразмеры. Заполняются только пустые ячейки реестра — "
+            "введённое вами не перезаписывается. Рукописные даты (день в "
+            "грифе) распознаются плохо — их вписывайте по превью.")
+        self.btn_ocr.clicked.connect(self._doc_ocr)
+        nav.addWidget(self.btn_ocr)
         prev_col.addLayout(nav)
         docs_row.addLayout(prev_col, 1)
         v1.addLayout(docs_row, 1)
@@ -482,6 +492,40 @@ class RepairPage(QWidget):
     def _doc_open_external(self):
         if self._doc_path and os.path.isfile(self._doc_path):
             os.startfile(self._doc_path)
+
+    def _doc_ocr(self):
+        if not self._doc_path:
+            self._log("Сначала выберите документ в списке", "warn")
+            return
+        from workers.repair_worker import RepairOcrWorker
+        self.btn_ocr.setEnabled(False)
+        w = RepairOcrWorker(self._doc_path, parent=self)
+        w.log.connect(lambda m: self._log(m, "info"))
+        w.info.connect(self._log)
+        w.result.connect(self._on_ocr)
+        w.finished_ok.connect(lambda ok: self.btn_ocr.setEnabled(True))
+        self._workers["ocr"] = w
+        w.start()
+
+    def _on_ocr(self, info):
+        from repair.doc_extract import merge_into_records
+        records = self._registry_records()
+        filled = merge_into_records(records, info)
+        if filled:
+            self._fill_registry(records)
+            self._log(f"Реестр: заполнено полей из распознанного — {filled} "
+                      f"(только пустые ячейки)", "done")
+        else:
+            self._log("Распознанное не добавило новых полей (заполнено "
+                      "вручную или номера актов не совпали)", "info")
+        # сверка содержимого с карточкой пункта — второй уровень светофора
+        unit, line = self._scan.get("unit", ""), self._scan.get("line", "")
+        if info.unit and unit and info.unit != unit:
+            self._log(f"Внимание: в документе установка {info.unit}, "
+                      f"у пункта {unit} — проверьте привязку", "error")
+        if info.line and line and info.line != line:
+            self._log(f"Внимание: в документе линия №{info.line}, "
+                      f"у пункта №{line} — проверьте привязку", "error")
 
     # ═════════════════════════════ Реестр ══════════════════════════════
 

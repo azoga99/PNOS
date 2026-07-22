@@ -165,6 +165,61 @@ class RepairVerifyWorker(QThread):
             self.finished_ok.emit(False)
 
 
+class RepairOcrWorker(QThread):
+    """Распознавание документа (Windows OCR) для предзаполнения реестра.
+    Читаются первые страницы (акт и реестр ИД всегда в начале комплекта)."""
+
+    log = Signal(str)
+    info = Signal(str, str)
+    finished_ok = Signal(bool)
+    result = Signal(object)          # DocInfo
+
+    MAX_PAGES = 6
+
+    def __init__(self, pdf_path: str, parent=None):
+        super().__init__(parent)
+        self.pdf_path = pdf_path
+
+    def run(self):
+        try:
+            from repair.ocr import available, ocr_array
+            from repair.pdf_preview import render_page, page_count
+            from repair.doc_extract import extract_doc_info
+
+            if not available():
+                self.info.emit("Windows OCR недоступен (нет русского "
+                               "языкового пакета)", "error")
+                self.finished_ok.emit(False)
+                return
+
+            n = min(page_count(self.pdf_path), self.MAX_PAGES)
+            lines: list[str] = []
+            for i in range(n):
+                self.info.emit(f"Распознавание: стр. {i + 1}/{n}...", "wait")
+                lines += ocr_array(render_page(self.pdf_path, i, scale=2.5))
+
+            info = extract_doc_info(lines)
+            self.result.emit(info)
+            got = []
+            if info.act_numbers:
+                got.append("акты " + ", ".join(info.act_numbers))
+            if info.act_date:
+                got.append(f"дата {info.act_date}")
+            if info.unit:
+                got.append(f"уст. {info.unit}")
+            if info.material:
+                got.append(info.material)
+            self.info.emit("Распознано: " + ("; ".join(got) if got else
+                           "полезных полей не найдено"), "done")
+            self.finished_ok.emit(True)
+
+        except Exception as e:
+            import traceback
+            self.log.emit(traceback.format_exc())
+            self.info.emit(f"Ошибка распознавания: {str(e)[:80]}", "error")
+            self.finished_ok.emit(False)
+
+
 class RepairApplyWorker(QThread):
     """Применение согласованных изменений (COM Excel + python-docx Word)."""
 
