@@ -282,16 +282,27 @@ class MainWindow(QMainWindow):
             ("Анализ пунктов", self.PAGE_ANALYTICS),
             ("Ремонт", self.PAGE_REPAIR),
         ]
+        # «Ремонт» как отдельная страница временно неактивна: функционал
+        # переезжает в этап «Ручной контроль». Код страницы сохранён (запасная
+        # мастерская для правки готовых пунктов), кнопка выключена.
+        disabled_pages = {self.PAGE_REPAIR}
         self._nav_buttons = {}
         nav_box = QVBoxLayout()
         nav_box.setContentsMargins(0, 12, 0, 0)
         nav_box.setSpacing(2)
         for caption, page_idx in nav_specs:
+            if page_idx in disabled_pages:
+                caption += "  (в разработке)"
             btn = QPushButton(caption)
             btn.setObjectName("nav_button")
             btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
             btn.clicked.connect(lambda checked, i=page_idx: self._switch_page(i))
+            if page_idx in disabled_pages:
+                btn.setEnabled(False)
+                btn.setCursor(Qt.ArrowCursor)
+                btn.setToolTip("Раздел в разработке: ремонт встраивается "
+                               "в этап «Ручной контроль».")
             self._nav_buttons[page_idx] = btn
             nav_box.addWidget(btn)
         nav_holder = QWidget()
