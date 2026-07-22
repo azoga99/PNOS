@@ -48,6 +48,29 @@ def red_mask(arr: np.ndarray) -> np.ndarray:
     return (r > 90) & (r - g > 40) & (r - b > 40)
 
 
+def _near_white(arr: np.ndarray) -> np.ndarray:
+    return (arr[:, :, 0] > 205) & (arr[:, :, 1] > 205) & (arr[:, :, 2] > 205)
+
+
+def _line_mask(arr: np.ndarray) -> np.ndarray:
+    """Чёрная линия трубопровода: тёмный нейтральный пиксель (не цветной)."""
+    r = arr[:, :, 0].astype(int)
+    g = arr[:, :, 1].astype(int)
+    b = arr[:, :, 2].astype(int)
+    mx = np.maximum(np.maximum(r, g), b)
+    mn = np.minimum(np.minimum(r, g), b)
+    return (mx < 95) & (mx - mn < 45)
+
+
+def ink_mask(arr: np.ndarray) -> np.ndarray:
+    """
+    Вся цветная разметка (красные глифы + их сглаженная кайма + цветовой шум
+    PNG), но НЕ фон и НЕ чёрные линии. Стирание по этой маске убирает старое
+    значение начисто, без синеватых «призраков» по краям.
+    """
+    return ~_near_white(arr) & ~_line_mask(arr)
+
+
 def label_bbox_at(arr: np.ndarray, x: int, y: int,
                   reach_x: int = 22, reach_y: int = 8,
                   max_grow: int = 60) -> BBox | None:
@@ -138,21 +161,29 @@ def find_value_span(arr: np.ndarray, bbox: BBox) -> BBox | None:
                 bbox.x1 + c2, bbox.y1 + int(ys.max()) + 1)
 
 
-def erase_red(arr: np.ndarray, bbox: BBox) -> int:
-    """Стереть красные пиксели в рамке (→ белый). Возвращает число пикселей."""
-    zone = arr[bbox.y1:bbox.y2, bbox.x1:bbox.x2]
-    m = red_mask(zone)
+def erase_red(arr: np.ndarray, bbox: BBox, pad: int = 3) -> int:
+    """
+    Стереть значение начисто: всю цветную разметку (красное + сглаженная кайма
+    + цветовой шум) в рамке с небольшим запасом → белый; чёрные линии
+    сохраняются. Возвращает число стёртых пикселей.
+    """
+    h, w = arr.shape[:2]
+    bb = bbox.pad(pad, w, h)
+    zone = arr[bb.y1:bb.y2, bb.x1:bb.x2]
+    m = ink_mask(zone)
     zone[m] = (255, 255, 255)
     return int(m.sum())
 
 
 def copy_red(arr: np.ndarray, src: BBox, dst_x: int, dst_y: int) -> int:
     """
-    Скопировать красные пиксели из рамки-источника в позицию (левый-нижний
-    угол назначения). Возвращает число перенесённых пикселей.
+    Скопировать глифы значения из рамки-источника в позицию (левый-нижний
+    угол назначения), вместе со сглаживанием — чтобы вставленное значение
+    выглядело «родным». Чёрные линии донора не переносятся. Возвращает
+    число перенесённых пикселей.
     """
     patch = arr[src.y1:src.y2, src.x1:src.x2].copy()
-    m = red_mask(patch)
+    m = ink_mask(patch)
     h, w = patch.shape[:2]
     y1 = dst_y - h
     region = arr[y1:y1 + h, dst_x:dst_x + w]
