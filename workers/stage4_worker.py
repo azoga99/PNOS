@@ -820,6 +820,27 @@ class Stage4Worker(QThread):
                         if os.path.exists(tmp): os.remove(tmp)
                     except Exception: pass
 
+                # --- Строка «Сведения о ремонте» ---
+                # COM-объекты закрыты выше, файлы разблокированы: читаем реестр
+                # (лист «Ремонт») и вписываем строку в готовый отчёт. Модуль
+                # «Ремонт» опционален — его отсутствие не должно ломать этап.
+                try:
+                    from repair.registry import read_registry
+                    from repair.svedenia import build_svedenia
+                    from repair.word_writer import write_svedenia
+                    xlsm_p = find_file(p_folder, (".xls", ".xlsx", ".xlsm"))
+                    records = read_registry(xlsm_p) if xlsm_p else []
+                    if records:
+                        report_p = find_report_file(p_folder)
+                        if report_p and write_svedenia(report_p, build_svedenia(records)):
+                            self.log.emit("   ✓ [Ремонт] Строка «Сведения о ремонте» "
+                                          "записана в отчёт")
+                        elif report_p:
+                            self.log.emit("   ⚠ [Ремонт] Строка «Сведения о ремонте» "
+                                          "в отчёте не найдена")
+                except Exception as e:
+                    self.log.emit(f"   ⚠ [Ремонт] Строку «Сведения» записать не удалось: {e}")
+
                 pct = 10 + int((i + 1) / len(point_folders) * 85)
                 self.progress.emit(min(pct, 95))
 
