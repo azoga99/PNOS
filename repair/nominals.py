@@ -30,12 +30,17 @@ def apply_nominals(
     sections: list[Section],
     replaced: dict[int, float],
     perehod: dict[int, tuple[str, str]] | None = None,
+    *,
+    by_row: bool = False,
 ) -> tuple[list[Section], list[Change]]:
     """
     sections — все сечения листа «Импорт» (исходные).
-    replaced — {№ сечения: новый номинал толщины, мм} из отметки сотрудника.
-    perehod  — {№ сечения: (толщина_строкой, диаметр_строкой)} для переходов
+    replaced — {ключ: новый номинал толщины, мм} из отметки сотрудника.
+    perehod  — {ключ: (толщина_строкой, диаметр_строкой)} для переходов
                (двусторонние значения, напр. ("12 / 10", "273 / 219")).
+
+    Ключ — № сечения (by_row=False, как в фикстурах/отчётах) или строка листа
+    «Импорт» (by_row=True — живой путь: номера сечений не уникальны).
 
     Возвращает (новые сечения, список изменений).
     """
@@ -44,19 +49,21 @@ def apply_nominals(
     changes: list[Change] = []
 
     for sec in sections:
-        if sec.number not in replaced:
+        key = sec.row if by_row else sec.number
+        if key not in replaced:
             new_sections.append(sec)
             continue
 
-        nominal = replaced[sec.number]
+        nominal = replaced[key]
 
-        if sec.number in perehod:
-            new_thick, new_diam = perehod[sec.number]
+        if key in perehod:
+            new_thick, new_diam = perehod[key]
         else:
             new_thick, new_diam = _fmt_thickness(nominal), sec.diameter
 
         m = _fmt_measure(nominal)
-        new_measures = [m] * len(sec.measures)
+        # номинал только в заполненные точки: пустая точка не «дорисовывается»
+        new_measures = [m if old else "" for old in sec.measures]
 
         new_sec = Section(
             number=sec.number,
@@ -65,6 +72,7 @@ def apply_nominals(
             diameter=new_diam,
             measures=new_measures,
             tmin=m,
+            row=sec.row,
         )
         new_sections.append(new_sec)
 
