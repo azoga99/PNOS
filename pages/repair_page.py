@@ -328,11 +328,10 @@ class RepairPage(QWidget):
         self.lbl_map_status.setMaximumWidth(260)
         side.addWidget(self.lbl_map_status)
         hint4 = QLabel(
-            "Правка «в два клика»: 1) кликните по подписи заменённого сечения; "
-            "2) кликните по подписи-донору, где уже написано нужное значение. "
-            "Стираются только красные пиксели, линии не страдают; глифы "
-            "копируются с этой же карты — шрифт совпадает идеально. "
-            "Колесо — зум, перетаскивание — панорама.")
+            "Кликните по подписи заменённого сечения и введите новое значение. "
+            "Шрифт Arial подбирается под размер подписи, цвет берётся из неё же "
+            "(сечение выделено оранжевым — останется оранжевым). Линии схемы "
+            "не страдают. Колесо — зум, перетаскивание — панорама.")
         hint4.setObjectName("hint")
         hint4.setWordWrap(True)
         hint4.setMaximumWidth(260)
@@ -861,27 +860,41 @@ class RepairPage(QWidget):
             if pm.width() > 250 else pm
 
     def _on_map_clicked(self, x: float, y: float):
+        """Клик по подписи → ввод нового значения (шрифт Arial и цвет
+        берутся из самой подписи, поэтому оранжевые сечения остаются
+        оранжевыми)."""
         if self._map_arr is None:
             return
+        from PySide6.QtWidgets import QInputDialog
+        from repair.map_editor import label_bbox_at, find_value_span
+
         xy = (int(x), int(y))
-        if self._map_pending is None:
-            self._map_pending = xy
-            self.lbl_map_status.setText(
-                "Теперь кликните по подписи-донору с нужным значением "
-                "(или ещё раз по той же — отмена)")
-            return
-        label_xy, donor_xy = self._map_pending, xy
-        self._map_pending = None
-        if abs(label_xy[0] - donor_xy[0]) < 5 and abs(label_xy[1] - donor_xy[1]) < 5:
+        current = ""
+        try:
+            lb = label_bbox_at(self._map_arr, *xy)
+            if lb is not None and find_value_span(self._map_arr, lb) is not None:
+                self.lbl_map_before.setPixmap(self._crop_pixmap(self._map_arr, lb))
+        except Exception:
+            pass
+
+        text, ok = QInputDialog.getText(
+            self, "Новое значение",
+            "Значение в скобках (как на схеме, напр. «(6.0)»):", text=current)
+        if not ok:
             self.lbl_map_status.setText("Отменено. Кликните по подписи сечения")
             return
-        self._map_apply_pair(label_xy, donor_xy)
+        text = text.strip()
+        if not text:
+            return
+        if not text.startswith("("):
+            text = f"({text})" if not text.endswith(")") else f"({text}"
+        self._map_apply_text(xy, text)
 
-    def _map_apply_pair(self, label_xy, donor_xy):
-        from repair.map_editor import replace_value
+    def _map_apply_text(self, label_xy, text):
+        from repair.map_editor import render_value
         before = self._map_arr.copy()
         try:
-            rep = replace_value(self._map_arr, label_xy, donor_xy)
+            rep = render_value(self._map_arr, label_xy, text)
         except ValueError as e:
             self._map_arr = before
             self._log(f"Карта: {e}", "error")
@@ -889,12 +902,12 @@ class RepairPage(QWidget):
                                         f"Кликните по подписи сечения")
             return
         lb = rep["label"]
-        self._map_edits.append((label_xy, donor_xy))
+        self._map_edits.append((label_xy, text))
         self.lbl_map_before.setPixmap(self._crop_pixmap(self._map_orig, lb))
         self.lbl_map_after.setPixmap(self._crop_pixmap(self._map_arr, lb))
         item = QListWidgetItem(
-            f"правка {len(self._map_edits)}: стёрто {rep['erased_px']} px, "
-            f"вставлено {rep['copied_px']} px")
+            f"правка {len(self._map_edits)}: {rep['text']} · Arial {rep['font_size']} · "
+            f"цвет RGB{rep['color']}")
         item.setIcon(dot_icon(_DOT["done"]))
         self.list_map_edits.addItem(item)
         self.map_view.set_image(self._np_to_qimage(self._map_arr))
@@ -907,13 +920,13 @@ class RepairPage(QWidget):
     def _map_undo(self):
         if not self._map_edits:
             return
-        from repair.map_editor import replace_value
+        from repair.map_editor import render_value
         self._map_edits.pop()
         self.list_map_edits.takeItem(self.list_map_edits.count() - 1)
         self._map_arr = self._map_orig.copy()
-        for label_xy, donor_xy in self._map_edits:
+        for label_xy, text in self._map_edits:
             try:
-                replace_value(self._map_arr, label_xy, donor_xy)
+                render_value(self._map_arr, label_xy, text)
             except ValueError:
                 pass
         self.map_view.set_image(self._np_to_qimage(self._map_arr))

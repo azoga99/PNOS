@@ -18,8 +18,10 @@
 
 from __future__ import annotations
 
-import numpy as np
+import os
 from dataclasses import dataclass
+
+import numpy as np
 
 
 @dataclass
@@ -189,6 +191,111 @@ def copy_red(arr: np.ndarray, src: BBox, dst_x: int, dst_y: int) -> int:
     region = arr[y1:y1 + h, dst_x:dst_x + w]
     region[m] = patch[m]
     return int(m.sum())
+
+
+def _ink_color(arr: np.ndarray, bbox: BBox) -> tuple[int, int, int]:
+    """
+    Цвет разметки подписи: медиана «самых цветных» её пикселей. Берётся из
+    самой подписи, поэтому оранжевые сечения остаются оранжевыми, а красные —
+    красными (на схемах заменяемые сечения часто выделены другим цветом).
+    """
+    zone = arr[bbox.y1:bbox.y2, bbox.x1:bbox.x2].reshape(-1, 3).astype(int)
+    if not len(zone):
+        return (158, 40, 36)
+    # «чернильные» пиксели: заметно цветные либо тёмные (без фона)
+    saturation = zone.max(axis=1) - zone.min(axis=1)
+    ink = zone[(saturation > 40) | (zone.max(axis=1) < 200)]
+    if not len(ink):
+        ink = zone
+    # медиана по чернилам вместе со сглаживанием: тонкие штрихи исходного
+    # чертёжного шрифта визуально светлее сплошной заливки Arial
+    return tuple(int(v) for v in np.median(ink, axis=0))
+
+
+def _font_path(italic: bool = True) -> str | None:
+    names = ["ariali.ttf", "arial.ttf"] if italic else ["arial.ttf", "ariali.ttf"]
+    for n in names:
+        p = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts", n)
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _font_for_text(text: str, target_h: int, italic: bool = True):
+    """
+    Arial такого кегля, чтобы отрисованный ТЕКСТ ЦЕЛИКОМ (со скобками) был по
+    высоте как исходное значение. Сравнение like-for-like: скобки выше цифр,
+    поэтому подбирать по высоте цифр нельзя — получится крупнее оригинала.
+    """
+    from PIL import ImageFont
+
+    path = _font_path(italic)
+    if path is None:
+        return ImageFont.load_default(), 0
+
+    size = max(6, int(target_h * 0.9))
+    best, best_d = None, 10 ** 9
+    for _ in range(40):
+        f = ImageFont.truetype(path, size)
+        box = f.getbbox(text)
+        h = box[3] - box[1]
+        d = abs(h - target_h)
+        if d < best_d:
+            best, best_d, best_size = f, d, size
+        if h == target_h or size <= 6:
+            return f, size
+        size += 1 if h < target_h else -1
+        size = max(6, size)
+    return best, best_size
+
+
+def render_value(arr: np.ndarray, label_xy: tuple[int, int], text: str,
+                 italic: bool = True) -> dict:
+    """
+    Правка «клик + ввод»: заменить значение подписи на введённый текст.
+    Цвет берётся из самой подписи, высота цифр — как у исходного значения,
+    шрифт Arial (курсив, как на схемах). Возвращает отчёт с рамками.
+    """
+    from PIL import Image, ImageDraw
+
+    lb = label_bbox_at(arr, *label_xy)
+    if lb is None:
+        raise ValueError("рядом с кликом не найдена подпись")
+    lv = find_value_span(arr, lb)
+    if lv is None:
+        raise ValueError("в подписи не выделяется значение «(…)»")
+
+    color = _ink_color(arr, lv)
+    font, size = _font_for_text(text, lv.height(), italic)
+
+    erased = erase_red(arr, lv)
+
+    # текст рисуем на прозрачном слое и вставляем по левому-нижнему углу
+    pad = 6
+    tmp = Image.new("RGBA", (lv.width() * 3 + 2 * pad, lv.height() * 3 + 2 * pad),
+                    (255, 255, 255, 0))
+    d = ImageDraw.Draw(tmp)
+    d.text((pad, pad), text, font=font, fill=tuple(color) + (255,))
+    bbox_t = tmp.getbbox()
+    if bbox_t is None:
+        raise ValueError("не удалось отрисовать текст")
+    glyphs = tmp.crop(bbox_t)
+
+    gh, gw = glyphs.size[1], glyphs.size[0]
+    x0 = lv.x1
+    y0 = max(0, lv.y2 - gh)
+    h, w = arr.shape[:2]
+    gw = min(gw, w - x0)
+    gh = min(gh, h - y0)
+    patch = np.array(glyphs.convert("RGBA"))[:gh, :gw]
+    alpha = patch[:, :, 3:4].astype(float) / 255.0
+    region = arr[y0:y0 + gh, x0:x0 + gw].astype(float)
+    arr[y0:y0 + gh, x0:x0 + gw] = (patch[:, :, :3] * alpha
+                                   + region * (1 - alpha)).astype(np.uint8)
+
+    return {"label": lb, "value_old": lv, "erased_px": erased,
+            "color": color, "font_size": size, "text": text,
+            "written_box": BBox(x0, y0, x0 + gw, y0 + gh)}
 
 
 def replace_value(arr: np.ndarray, label_xy: tuple[int, int],

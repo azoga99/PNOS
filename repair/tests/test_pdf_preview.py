@@ -7,7 +7,15 @@ import pytest
 
 from repair.pdf_preview import page_count, render_page, close_all
 
-REAL_ACT = r"C:\Users\volod\Desktop\п.2775\Акт отбраковки\222-1-143 № 122 39-40 30.03.2026.pdf"
+_CANDIDATES = [
+    r"C:\Users\volod\Desktop\Готовые — копия\п.2775(ШАР)\Акт отбраковки"
+    r"\222-1-143 № 122 39-40 30.03.2026.pdf",
+    r"C:\Users\volod\Desktop\Готовые\п.2775(ШАР)\Акт отбраковки"
+    r"\222-1-143 № 122 39-40 30.03.2026.pdf",
+    r"C:\Users\volod\Desktop\п.2775\Акт отбраковки"
+    r"\222-1-143 № 122 39-40 30.03.2026.pdf",
+]
+REAL_ACT = next((p for p in _CANDIDATES if os.path.isfile(p)), _CANDIDATES[0])
 
 
 @pytest.fixture(autouse=True)
