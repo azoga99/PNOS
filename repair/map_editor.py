@@ -64,6 +64,23 @@ def _line_mask(arr: np.ndarray) -> np.ndarray:
     return (mx < 95) & (mx - mn < 45)
 
 
+def markup_mask(arr: np.ndarray) -> np.ndarray:
+    """
+    Только цветная разметка любого цвета: красная, синяя, оранжевая.
+
+    В отличие от `ink_mask` не захватывает серую кайму сглаживания чёрных
+    линий. Для поиска подписей это принципиально: по маске со сглаживанием
+    рамка подписи прирастает к трубопроводу и перестаёт быть похожей на
+    текстовую строку.
+    """
+    r = arr[:, :, 0].astype(int)
+    g = arr[:, :, 1].astype(int)
+    b = arr[:, :, 2].astype(int)
+    mx = np.maximum(np.maximum(r, g), b)
+    mn = np.minimum(np.minimum(r, g), b)
+    return (mx > 90) & (mx - mn > 45)
+
+
 def ink_mask(arr: np.ndarray) -> np.ndarray:
     """
     Вся цветная разметка (красные глифы + их сглаженная кайма + цветовой шум
@@ -75,17 +92,22 @@ def ink_mask(arr: np.ndarray) -> np.ndarray:
 
 def label_bbox_at(arr: np.ndarray, x: int, y: int,
                   reach_x: int = 22, reach_y: int = 8,
-                  max_grow: int = 60) -> BBox | None:
+                  max_grow: int = 60,
+                  mask: np.ndarray | None = None) -> BBox | None:
     """
-    Рамка красной подписи (одной текстовой строки) вокруг точки клика.
-    Рамка растёт, пока в зоне досягаемости за её краями есть красные пиксели.
+    Рамка подписи (одной текстовой строки) вокруг точки клика.
+    Рамка растёт, пока в зоне досягаемости за её краями есть пиксели разметки.
     Досягаемость раздельная: по горизонтали reach_x больше пробела
     «номер—значение» (~10–15 px), по вертикали reach_y меньше межстрочного
     расстояния — иначе рамка слипается с соседними подписями (реальный случай
     «16 (6.0)» на карте п.2775).
+
+    По умолчанию берётся красная разметка. Готовую маску можно передать
+    снаружи: на картах есть подписи не только красные, но и синие с
+    оранжевыми — для их поиска нужна маска всей цветной разметки (`ink_mask`).
     """
     h, w = arr.shape[:2]
-    m = red_mask(arr)
+    m = red_mask(arr) if mask is None else mask
 
     # стартовая привязка: ближайший красный пиксель в окне вокруг клика
     win = 24
@@ -249,6 +271,23 @@ def _font_for_text(text: str, target_h: int, italic: bool = True):
     return best, best_size
 
 
+def tighten_to_ink(arr: np.ndarray, box: BBox, pad: int = 2) -> BBox | None:
+    """
+    Ужать рамку до фактических цветных глифов внутри неё.
+
+    Нужно, когда рамка пришла извне (например, от OCR): она бывает свободнее
+    глифов, а для стирания и подбора размера шрифта требуются точные границы.
+    """
+    h, w = arr.shape[:2]
+    bb = box.pad(pad, w, h)
+    m = markup_mask(arr[bb.y1:bb.y2, bb.x1:bb.x2])
+    ys, xs = np.nonzero(m)
+    if len(xs) == 0:
+        return None
+    return BBox(bb.x1 + int(xs.min()), bb.y1 + int(ys.min()),
+                bb.x1 + int(xs.max()) + 1, bb.y1 + int(ys.max()) + 1)
+
+
 def render_value(arr: np.ndarray, label_xy: tuple[int, int], text: str,
                  italic: bool = True) -> dict:
     """
@@ -256,15 +295,30 @@ def render_value(arr: np.ndarray, label_xy: tuple[int, int], text: str,
     Цвет берётся из самой подписи, высота цифр — как у исходного значения,
     шрифт Arial (курсив, как на схемах). Возвращает отчёт с рамками.
     """
-    from PIL import Image, ImageDraw
-
     lb = label_bbox_at(arr, *label_xy)
     if lb is None:
         raise ValueError("рядом с кликом не найдена подпись")
     lv = find_value_span(arr, lb)
     if lv is None:
         raise ValueError("в подписи не выделяется значение «(…)»")
+    return render_value_in(arr, lv, text, italic=italic, label=lb)
 
+
+def render_value_in(arr: np.ndarray, value_box: BBox, text: str,
+                    italic: bool = True, label: BBox | None = None) -> dict:
+    """
+    Заменить значение в ЗАРАНЕЕ ИЗВЕСТНОЙ рамке.
+
+    Отдельно от `render_value` потому, что при автоматической правке рамка
+    берётся из распознанной подписи, а не выращивается от клика. Наращивание
+    рядом с подписью цепляет красный крестик замера: рамка «раздувается», и
+    значение пишется чёрным, огромным и не на своём месте (наступил на это
+    на карте п.2763, сечение 115).
+    """
+    from PIL import Image, ImageDraw
+
+    lv = tighten_to_ink(arr, value_box) or value_box
+    lb = label if label is not None else lv
     color = _ink_color(arr, lv)
     font, size = _font_for_text(text, lv.height(), italic)
 
