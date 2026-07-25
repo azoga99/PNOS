@@ -18,12 +18,12 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import Qt, Signal, QPointF
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtGui import QImage, QPixmap, QIcon
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame, QLabel,
     QLineEdit, QPushButton, QFileDialog, QListWidget, QListWidgetItem,
     QTableWidget, QTableWidgetItem, QTabWidget, QHeaderView, QAbstractItemView,
-    QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
+    QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QTextEdit, QCheckBox,
 )
 
 from widgets import dot_icon
@@ -49,9 +49,38 @@ class MapView(QGraphicsView):
         self._scene.clear()
         self._pix_item = self._scene.addPixmap(QPixmap.fromImage(qimage))
         self._scene.setSceneRect(self._pix_item.boundingRect())
+        self._marks = []
         if not self._fitted:
             self.fitInView(self._pix_item, Qt.KeepAspectRatio)
             self._fitted = True
+
+    def show_at(self, x: float, y: float, box=None, zoom: float = 3.0):
+        """
+        Подвести взгляд к точке: рамка вокруг подписи и центрирование.
+
+        Это и убирает шаг «найти сечение на схеме»: программа знает координаты
+        подписи и сама показывает нужное место.
+        """
+        from PySide6.QtGui import QPen, QColor
+        from PySide6.QtCore import QRectF
+
+        if self._pix_item is None:
+            return
+        for it in getattr(self, "_marks", []):
+            self._scene.removeItem(it)
+        self._marks = []
+        if box is not None:
+            pad = 6
+            rect = QRectF(box.x1 - pad, box.y1 - pad,
+                          (box.x2 - box.x1) + 2 * pad,
+                          (box.y2 - box.y1) + 2 * pad)
+            pen = QPen(QColor(0, 170, 90))
+            pen.setWidth(3)
+            pen.setCosmetic(True)
+            self._marks.append(self._scene.addRect(rect, pen))
+        self.resetTransform()
+        self.scale(zoom, zoom)
+        self.centerOn(x, y)
 
     def wheelEvent(self, event):
         factor = 1.2 if event.angleDelta().y() > 0 else 1 / 1.2
@@ -92,16 +121,25 @@ class RepairPage(QWidget):
         self._workers = {}
         self._scan: dict = {}          # результат RepairScanWorker
         self._preview = None           # (ops_by_change, changes, svedenia)
+        # строка «Сведения о ремонте»: собранная программой и правка сотрудника
+        self._sved_generated = ""
+        self._sved_edited = False
+        self._sved_programmatic = False
         # состояние вкладки «Карта»
         self._map_path: str | None = None
         self._map_orig = None          # numpy-массив исходной карты
         self._map_arr = None           # numpy-массив с правками
         self._map_edits: list = []     # [(label_xy, donor_xy, описание)]
         self._map_pending = None       # первый клик пары (label_xy)
+        self._map_labels: list = []    # подписи сечений, найденные на карте
+        self._map_by_number: dict = {} # номер сечения → список подписей
+        self._map_shown = None         # (номер, новое значение, подпись) на экране
+        self._map_cycle: dict = {}     # номер → какое из мест показано
         # состояние превью документа (вкладка 1)
         self._doc_path: str | None = None
         self._doc_page_idx = 0
         self._doc_pages = 0
+        self._id_map = None            # карта разделов комплекта ИД
         self._build_ui()
 
     # ═══════════════════════════════════ UI ═══════════════════════════
@@ -237,6 +275,9 @@ class RepairPage(QWidget):
         self.tbl_registry.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.tbl_registry.horizontalHeader().setStretchLastSection(True)
         self.tbl_registry.verticalHeader().setVisible(False)
+        # Высота строки с запасом: в неё встаёт редактор ячейки, иначе текст
+        # при вводе обрезается по высоте.
+        self.tbl_registry.verticalHeader().setDefaultSectionSize(30)
         v1.addWidget(self.tbl_registry, 1)
         row1 = QHBoxLayout()
         for text, slot in (("Добавить запись", self._reg_add),
@@ -272,23 +313,108 @@ class RepairPage(QWidget):
             ["Сечение", "Элемент", "Тисп", "Диам", "Замеры", "Мин",
              "Новый номинал"])
         self.tbl_sections.verticalHeader().setVisible(False)
+        self.tbl_sections.verticalHeader().setDefaultSectionSize(30)
         self.tbl_sections.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.tbl_sections.horizontalHeader().setStretchLastSection(True)
-        v2.addWidget(self.tbl_sections, 1)
+
+        # Таблица слева, схема дефектного участка из акта — справа: на схеме
+        # заменённый элемент выделен красным, и сверять кандидатов удобнее,
+        # не выходя из программы.
+        sec_row = QHBoxLayout()
+        sec_row.setSpacing(8)
+        sec_row.addWidget(self.tbl_sections, 3)
+        self.scheme_view = MapView()
+        self.scheme_view.setMinimumWidth(280)
+        self.scheme_view.setVisible(False)
+        sec_row.addWidget(self.scheme_view, 2)
+        v2.addLayout(sec_row, 1)
+
+        row2 = QHBoxLayout()
+        self.chk_hide_small = QCheckBox("Скрыть задвижки и бобышки")
+        self.chk_hide_small.setChecked(True)
+        self.chk_hide_small.setToolTip(
+            "По правилам их номиналы не обновляются. Снимите галочку, если "
+            "нужно вписать номинал такому элементу явно.")
+        self.chk_hide_small.toggled.connect(self._apply_sections_filter)
+        row2.addWidget(self.chk_hide_small)
+
+        self.btn_scheme = QPushButton("Схема из акта")
+        self.btn_scheme.setObjectName("segment")
+        self.btn_scheme.setCursor(Qt.PointingHandCursor)
+        self.btn_scheme.setCheckable(True)
+        self.btn_scheme.setToolTip(
+            "Показать лист акта со схемой дефектного участка: заменяемый "
+            "элемент выделен на ней красным")
+        self.btn_scheme.toggled.connect(self._toggle_scheme)
+        row2.addWidget(self.btn_scheme)
+
+        self.btn_suggest = QPushButton("Подобрать по документам")
+        self.btn_suggest.setObjectName("segment")
+        self.btn_suggest.setCursor(Qt.PointingHandCursor)
+        self.btn_suggest.setToolTip(
+            "Сопоставить строки таблицы замены из документов с сечениями по "
+            "типу элемента и диаметру. Если подходит несколько сечений, все "
+            "они помечаются — выбрать место поможет карта.")
+        self.btn_suggest.clicked.connect(self._suggest_sections)
+        row2.addWidget(self.btn_suggest)
+        row2.addStretch()
+        hint_sug = QLabel("Зелёная точка — сечение одно; оранжевая — подходящих "
+                          "несколько, номинал не подставляется")
+        hint_sug.setObjectName("hint")
+        row2.addWidget(hint_sug)
+        v2.addLayout(row2)
         self.tabs.addTab(tab_sec, "Сечения")
 
         # Вкладка 3: предпросмотр
         tab_prev = QWidget()
         v3 = QVBoxLayout(tab_prev)
         v3.setSpacing(6)
-        self.lbl_sved = QLabel("")
+        # Строка «Сведения о ремонте» — главный результат работы модуля,
+        # поэтому она показывается целиком и её можно поправить руками до
+        # записи: формулировки в отчётах набивались годами, и последнее слово
+        # за экспертом.
+        lbl_sv_title = QLabel("Строка «Сведения о ремонте» — попадёт в таблицу 1 "
+                              "отчёта. Можно править перед записью.")
+        lbl_sv_title.setObjectName("section_label")
+        lbl_sv_title.setWordWrap(True)
+        v3.addWidget(lbl_sv_title)
+
+        lbl_now = QLabel("Сейчас в отчёте")
+        lbl_now.setObjectName("hint")
+        v3.addWidget(lbl_now)
+        self.txt_sved_now = QTextEdit()
+        self.txt_sved_now.setReadOnly(True)
+        self.txt_sved_now.setFixedHeight(58)
+        v3.addWidget(self.txt_sved_now)
+
+        self.lbl_sved = QLabel("Станет")
         self.lbl_sved.setObjectName("hint")
-        self.lbl_sved.setWordWrap(True)
         v3.addWidget(self.lbl_sved)
+        self.txt_sved = QTextEdit()
+        self.txt_sved.setFixedHeight(86)
+        self.txt_sved.setPlaceholderText(
+            "Строка появится после проверки пункта")
+        self.txt_sved.textChanged.connect(self._on_sved_edited)
+        v3.addWidget(self.txt_sved)
+
+        row_sv = QHBoxLayout()
+        self.btn_sved_reset = QPushButton("Вернуть сгенерированную")
+        self.btn_sved_reset.setObjectName("segment")
+        self.btn_sved_reset.setCursor(Qt.PointingHandCursor)
+        self.btn_sved_reset.setToolTip(
+            "Восстановить строку, собранную программой из реестра ремонтов")
+        self.btn_sved_reset.clicked.connect(self._reset_svedenia)
+        row_sv.addWidget(self.btn_sved_reset)
+        row_sv.addStretch()
+        v3.addLayout(row_sv)
+
         self.tbl_preview = QTableWidget(0, 4)
         self.tbl_preview.setHorizontalHeaderLabels(["✓", "Где", "Было", "Станет"])
         self.tbl_preview.verticalHeader().setVisible(False)
         self.tbl_preview.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        # Значения бывают длинными — переносим по словам и тянем высоту строк,
+        # иначе «Станет» показывается обрезанным с многоточием.
+        self.tbl_preview.setWordWrap(True)
         hdr = self.tbl_preview.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeToContents)
@@ -337,7 +463,7 @@ class RepairPage(QWidget):
         hint4.setMaximumWidth(260)
         side.addWidget(hint4)
 
-        self.btn_map_load = QPushButton("Загрузить карту")
+        self.btn_map_load = QPushButton("Перезагрузить карту")
         self.btn_map_load.setObjectName("segment")
         self.btn_map_load.setCursor(Qt.PointingHandCursor)
         self.btn_map_load.clicked.connect(self._map_load)
@@ -353,10 +479,49 @@ class RepairPage(QWidget):
         self.lbl_map_after.setMaximumWidth(260)
         side.addWidget(self.lbl_map_after)
 
+        # Правки, которые предстоит внести: берутся из колонки «Новый номинал»
+        # вкладки «Сечения». Программа сама находит подпись на карте, поэтому
+        # искать сечение глазами не нужно.
+        lbl_plan = QLabel("Правки по сечениям")
+        lbl_plan.setObjectName("section_label")
+        side.addWidget(lbl_plan)
+        self.list_map_plan = QListWidget()
+        self.list_map_plan.setObjectName("activity_feed")
+        self.list_map_plan.setMaximumWidth(260)
+        self.list_map_plan.setToolTip(
+            "Клик — перейти к подписи на карте. Если сечений с таким номером "
+            "несколько, повторный клик показывает следующее место.")
+        self.list_map_plan.itemClicked.connect(self._map_plan_clicked)
+        side.addWidget(self.list_map_plan, 1)
+
+        row_plan = QHBoxLayout()
+        self.btn_map_apply_one = QPushButton("Проставить показанное")
+        self.btn_map_apply_one.setObjectName("segment")
+        self.btn_map_apply_one.setCursor(Qt.PointingHandCursor)
+        self.btn_map_apply_one.setEnabled(False)
+        self.btn_map_apply_one.setToolTip(
+            "Записать новое значение в подпись, к которой перешли")
+        self.btn_map_apply_one.clicked.connect(self._map_apply_shown)
+        row_plan.addWidget(self.btn_map_apply_one)
+        side.addLayout(row_plan)
+        self.btn_map_apply_unique = QPushButton("Проставить все однозначные")
+        self.btn_map_apply_unique.setObjectName("segment")
+        self.btn_map_apply_unique.setCursor(Qt.PointingHandCursor)
+        self.btn_map_apply_unique.setEnabled(False)
+        self.btn_map_apply_unique.setToolTip(
+            "Проставить значения там, где подпись сечения на карте одна. "
+            "Места с несколькими подписями остаются на ваше решение.")
+        self.btn_map_apply_unique.clicked.connect(self._map_apply_unique)
+        side.addWidget(self.btn_map_apply_unique)
+
+        lbl_done = QLabel("Внесённые правки")
+        lbl_done.setObjectName("section_label")
+        side.addWidget(lbl_done)
         self.list_map_edits = QListWidget()
         self.list_map_edits.setObjectName("activity_feed")
         self.list_map_edits.setMaximumWidth(260)
-        side.addWidget(self.list_map_edits, 1)
+        self.list_map_edits.setMaximumHeight(110)
+        side.addWidget(self.list_map_edits)
 
         self.btn_map_undo = QPushButton("Отменить последнюю правку")
         self.btn_map_undo.setObjectName("segment")
@@ -468,6 +633,7 @@ class RepairPage(QWidget):
         self._fill_registry(res.get("records", []))
         self._fill_sections(res.get("sections", []))
         self._refresh_preview()
+        self._map_autoload()
 
     # ═════════════════════════ Превью документа ════════════════════════
 
@@ -519,9 +685,60 @@ class RepairPage(QWidget):
         w.log.connect(lambda m: self._log(m, "info"))
         w.info.connect(self._log)
         w.result.connect(self._on_ocr)
+        w.map_ready.connect(self._on_id_map)
+        w.zone_hint.connect(self._on_zone_hint)
         w.finished_ok.connect(lambda ok: self.btn_ocr.setEnabled(True))
         self._workers["ocr"] = w
         w.start()
+
+    def _on_id_map(self, page_map):
+        """Карта разделов комплекта ИД: показываем, где что лежит."""
+        self._id_map = page_map
+        if not page_map:
+            return
+        if not page_map.get("разделы"):
+            self._log(f"Реестр ИД найден на стр. {page_map['страница_реестра']}, "
+                      f"но таблица не разобрана — разделы придётся искать глазами",
+                      "warn")
+            return
+        from repair.id_map import quality_cert_section, find_section, SEC_ACT
+        части = []
+        акт = find_section(page_map, SEC_ACT)
+        if акт:
+            части.append(f"копия акта — стр. {акт['pdf'][0]}–{акт['pdf'][1]}")
+        cert = quality_cert_section(page_map)
+        if cert:
+            части.append(f"удостоверение о качестве — стр. "
+                         f"{cert['pdf'][0]}–{cert['pdf'][1]}")
+        if части:
+            self._log("В комплекте: " + "; ".join(части), "info")
+
+    def _on_zone_hint(self, hint):
+        """
+        Показать сотруднику фрагмент, который OCR прочитать не может.
+
+        Рукописные даты и штампы Windows OCR не распознаёт вовсе, поэтому
+        программа открывает нужный кроп сама — иначе пришлось бы листать
+        комплект на сотню страниц.
+        """
+        if not hint or not self._doc_path:
+            return
+        try:
+            from repair.pdf_preview import render_zone
+            полоса = hint.get("полоса") or [0.6, 1.0]
+            arr = render_zone(self._doc_path, hint["page"] - 1,
+                              полоса[0], полоса[1],
+                              rotation=hint.get("поворот", 0), scale=2.8)
+            self.doc_view._fitted = False
+            self.doc_view.set_image(self._np_to_qimage(arr))
+            self._doc_page_idx = hint["page"] - 1
+            подпись = hint.get("зачем", "фрагмент")
+            self.lbl_pg.setText(f"стр. {hint['page']} · {подпись}")
+            if not hint.get("найдено"):
+                self._log(f"Впишите «{подпись}» в реестр по этому фрагменту "
+                          f"(стр. {hint['page']})", "wait")
+        except Exception as e:
+            self._log(f"Фрагмент не показан: {e}", "warn")
 
     def _on_ocr(self, info):
         from repair.doc_extract import merge_into_records
@@ -595,6 +812,129 @@ class RepairPage(QWidget):
                 self.tbl_sections.setItem(r, c, it)
             # строка листа — в данных первой ячейки
             self.tbl_sections.item(r, 0).setData(Qt.UserRole, s.row)
+        self._apply_sections_filter()
+
+    def _apply_sections_filter(self):
+        """
+        Скрыть строки, которые по правилам не обновляются.
+
+        Задвижек и бобышек в пункте бывает больше, чем труб, и они занимают
+        экран, мешая искать заменённое сечение. Строку с уже вписанным
+        номиналом не прячем никогда — иначе правка исчезнет из виду.
+        """
+        from repair.config import REPAIR_CONFIG
+
+        мелкие = [e.lower() for e in
+                  (list(REPAIR_CONFIG.get("SMALL_ELEMENTS") or [])
+                   + list(REPAIR_CONFIG.get("EXCLUDE_FROM_TABLE3") or []))]
+        прятать = self.chk_hide_small.isChecked()
+        скрыто = 0
+        for r in range(self.tbl_sections.rowCount()):
+            эл = self.tbl_sections.item(r, 1)
+            ном = self.tbl_sections.item(r, 6)
+            мелкий = bool(эл) and any(эл.text().strip().lower().startswith(m)
+                                      for m in мелкие)
+            заполнен = bool(ном) and bool(ном.text().strip())
+            надо_скрыть = прятать and мелкий and not заполнен
+            self.tbl_sections.setRowHidden(r, надо_скрыть)
+            скрыто += int(надо_скрыть)
+        if прятать and скрыто:
+            self.chk_hide_small.setText(f"Скрыть задвижки и бобышки ({скрыто})")
+        else:
+            self.chk_hide_small.setText("Скрыть задвижки и бобышки")
+
+    def _toggle_scheme(self, показать: bool):
+        """Показать/скрыть лист акта со схемой дефектного участка."""
+        if not показать:
+            self.scheme_view.setVisible(False)
+            return
+        docs = self._scan.get("docs")
+        файлы = list(getattr(docs, "act_files", []) or [])
+        if not файлы:
+            self._log("Отдельного акта отбраковки в пункте нет — схему "
+                      "смотрите в комплекте ИД", "warn")
+            self.btn_scheme.setChecked(False)
+            return
+        try:
+            from repair.pdf_preview import page_count, render_zone
+            путь = файлы[0]
+            # Схема — на последнем листе акта, над таблицей замены.
+            стр = page_count(путь)
+            arr = render_zone(путь, стр - 1, 0.0, 0.75, scale=2.0)
+            self.scheme_view._fitted = False
+            self.scheme_view.set_image(self._np_to_qimage(arr))
+            self.scheme_view.setVisible(True)
+            self._log(f"Схема дефектного участка: {os.path.basename(путь)}, "
+                      f"лист {стр}", "info")
+        except Exception as e:
+            self._log(f"Схему показать не удалось: {e}", "warn")
+            self.btn_scheme.setChecked(False)
+
+    def _replacement_lines(self) -> list[str]:
+        """Строки таблицы замены из реестра (колонка «Замена»)."""
+        out = []
+        for r in range(self.tbl_registry.rowCount()):
+            it = self.tbl_registry.item(r, 4)
+            текст = (it.text().strip() if it else "")
+            for часть in текст.replace(";", "\n").splitlines():
+                часть = часть.strip()
+                if часть:
+                    out.append(часть)
+        return out
+
+    def _suggest_sections(self):
+        """
+        Подобрать сечения по таблице замены из документов.
+
+        Однозначного ответа обычно нет: в пункте бывает по два десятка труб
+        одного диаметра. Поэтому номинал подставляется только там, где сечение
+        одно, а прочие кандидаты просто помечаются — выбрать место помогает
+        карта, где видно, какой участок заменён.
+        """
+        from repair.suggest import suggest_sections, describe
+
+        строки = self._replacement_lines()
+        сечения = self._scan.get("sections", [])
+        if not строки:
+            self._log("В реестре не заполнена колонка «Замена» — подбирать "
+                      "не по чему", "warn")
+            return
+        if not сечения:
+            self._log("Сечения не прочитаны — сначала «Проверить пункт»", "warn")
+            return
+
+        # снять прежние пометки
+        for r in range(self.tbl_sections.rowCount()):
+            it = self.tbl_sections.item(r, 0)
+            if it is not None:
+                it.setIcon(QIcon())
+                it.setToolTip("")
+
+        по_строке = {}
+        for r in range(self.tbl_sections.rowCount()):
+            it = self.tbl_sections.item(r, 0)
+            if it is not None:
+                по_строке[it.data(Qt.UserRole)] = r
+
+        всего = подставлено = 0
+        for s in suggest_sections(строки, сечения):
+            self._log(describe(s), "done" if s.кандидаты else "warn")
+            for c in s.кандидаты:
+                r = по_строке.get(c.row)
+                if r is None:
+                    continue
+                всего += 1
+                it = self.tbl_sections.item(r, 0)
+                it.setIcon(dot_icon(_DOT["done" if s.однозначно else "warn"]))
+                it.setToolTip(f"{s.строка} → предлагаемый номинал {s.номинал}")
+                if s.однозначно:
+                    цель = self.tbl_sections.item(r, 6)
+                    if цель is not None and not цель.text().strip():
+                        цель.setText(s.номинал)
+                        подставлено += 1
+        self._log(f"Подбор: помечено сечений {всего}, номинал подставлен "
+                  f"в {подставлено}", "info")
+        self._refresh_map_plan()
 
     def _collect_nominals(self):
         """Из колонки «Новый номинал» → ({row: float}, {row: (толщ, диам)}, ошибки)."""
@@ -630,8 +970,15 @@ class RepairPage(QWidget):
     # ═════════════════════════════ Предпросмотр ════════════════════════
 
     def _on_tab_changed(self, index: int):
-        if self.tabs.tabText(index) == "Предпросмотр":
+        вкладка = self.tabs.tabText(index)
+        if вкладка == "Предпросмотр":
             self._refresh_preview()
+            # Пересчёт высоты строк — уже на видимой вкладке: колонки тянутся
+            # по ширине, и при скрытой вкладке высота считается по неверной.
+            self.tbl_preview.resizeRowsToContents()
+        elif вкладка == "Карта":
+            # Номиналы могли вписать уже после загрузки карты.
+            self._refresh_map_plan()
 
     def _refresh_preview(self):
         from repair.nominals import apply_nominals
@@ -646,15 +993,23 @@ class RepairPage(QWidget):
         sections = self._scan.get("sections", [])
         if not self._scan or not self._scan.get("docs") \
                 or not self._scan["docs"].has_repair:
-            self.lbl_sved.setText("")
+            self._set_svedenia_text("")
+            self.txt_sved_now.setPlainText("")
             return
 
         records = self._registry_records()
-        svedenia = build_svedenia(records)
+        собранная = build_svedenia(records)
         now = self._scan.get("svedenia_now")
-        self.lbl_sved.setText(
-            f"Строка «Сведения о ремонте»\nБыло: {now or '(не найдена)'}\n"
-            f"Станет: {svedenia}")
+        self._sved_generated = собранная
+        self.txt_sved_now.setPlainText(now or "(строка в отчёте не найдена)")
+        # Правку сотрудника не затираем: пересборка предпросмотра случается на
+        # каждом переключении вкладки.
+        if self._sved_edited:
+            self.lbl_sved.setText("Станет — изменено вручную")
+        else:
+            self.lbl_sved.setText("Станет")
+            self._set_svedenia_text(собранная)
+        svedenia = self._svedenia_text()
 
         rows, perehod, errors = self._collect_nominals()
         for e in errors:
@@ -685,6 +1040,7 @@ class RepairPage(QWidget):
             self.tbl_preview.setItem(i, 1, QTableWidgetItem(f"Импорт · {ch.where}"))
             self.tbl_preview.setItem(i, 2, QTableWidgetItem(ch.before))
             self.tbl_preview.setItem(i, 3, QTableWidgetItem(ch.after))
+        self.tbl_preview.resizeRowsToContents()
 
         # сопоставление галочка → операции: по номеру строки листа
         sheet_rows_in_order = [s.row for s in new if s.row in rows]
@@ -699,6 +1055,37 @@ class RepairPage(QWidget):
         self.btn_apply.setEnabled(has_any)
         self.btn_checklist.setEnabled(has_any)
 
+    # ── строка «Сведения о ремонте»: показ и правка ──────────────────
+
+    def _svedenia_text(self) -> str:
+        return " ".join(self.txt_sved.toPlainText().split()).strip()
+
+    def _set_svedenia_text(self, text: str):
+        """Записать строку в поле, не пометив её как правку сотрудника."""
+        self._sved_programmatic = True
+        try:
+            self.txt_sved.setPlainText(text)
+        finally:
+            self._sved_programmatic = False
+
+    def _on_sved_edited(self):
+        if self._sved_programmatic:
+            return
+        self._sved_edited = True
+        self.lbl_sved.setText("Станет — изменено вручную")
+        # В таблице предпросмотра показываем именно то, что будет записано.
+        it = self.tbl_preview.item(0, 3)
+        if it is not None:
+            it.setText(self._svedenia_text())
+            self.tbl_preview.resizeRowsToContents()
+
+    def _reset_svedenia(self):
+        self._sved_edited = False
+        self._set_svedenia_text(self._sved_generated)
+        self.lbl_sved.setText("Станет")
+        self._refresh_preview_keep_checks()
+        self._log("Строка «Сведения о ремонте» восстановлена по реестру", "info")
+
     def _gather_enabled(self):
         """Считать галочки предпросмотра → (ops, svedenia_or_None)."""
         p = self._preview or {}
@@ -707,7 +1094,8 @@ class RepairPage(QWidget):
         sved = None
         it = self.tbl_preview.item(0, 0)
         if it is not None and it.checkState() == Qt.Checked:
-            sved = p["svedenia"]
+            # Берём текст из поля: сотрудник мог его поправить.
+            sved = self._svedenia_text() or p["svedenia"]
         ops = []
         order = p["sheet_rows_in_order"]
         for i, sheet_row in enumerate(order, start=1):
@@ -826,6 +1214,21 @@ class RepairPage(QWidget):
         h, w = a.shape[:2]
         return QImage(a.data, w, h, 3 * w, QImage.Format_RGB888).copy()
 
+    def _map_autoload(self):
+        """
+        Подгрузить карту сразу при проверке пункта.
+
+        Путь к рабочей карте выводится из номера пункта («Первичка/NNNN.png»),
+        так что просить сотрудника нажимать «Загрузить карту» незачем. Если
+        карты нет — молча ничего не делаем: у пункта её может и не быть.
+        """
+        folder = self._point_folder()
+        if not os.path.isdir(folder) or not self._find_map_path(folder):
+            self.lbl_map_status.setText(
+                "Рабочая карта (Первичка/NNNN.png) в пункте не найдена")
+            return
+        self._map_load()
+
     def _map_load(self):
         folder = self._point_folder()
         if not os.path.isdir(folder):
@@ -850,6 +1253,176 @@ class RepairPage(QWidget):
         self.lbl_map_status.setText(
             f"{os.path.basename(path)} · кликните по подписи заменённого сечения")
         self._log(f"Карта загружена: {os.path.basename(path)}", "info")
+        self._map_cycle = {}
+        self.list_map_edits.clear()
+        self._map_scan_labels()
+
+    # ── подписи сечений на карте и план правок ───────────────────────
+
+    def _map_scan_labels(self):
+        """Найти подписи сечений на загруженной карте (фоном)."""
+        if self._map_arr is None:
+            return
+        from workers.repair_worker import MapLabelsWorker
+        self._map_labels = []
+        self._map_by_number = {}
+        self.lbl_map_status.setText(
+            f"{os.path.basename(self._map_path or '')} · ищу подписи сечений…")
+        w = MapLabelsWorker(self._map_arr.copy(), parent=self)
+        w.log.connect(lambda m: self._log(m, "info"))
+        w.info.connect(self._log)
+        w.result.connect(self._on_map_labels)
+        self._workers["map_labels"] = w
+        w.start()
+
+    def _on_map_labels(self, labels):
+        from repair.map_labels import labels_by_number
+        self._map_labels = labels or []
+        self._map_by_number = labels_by_number(self._map_labels)
+        self.lbl_map_status.setText(
+            f"{os.path.basename(self._map_path or '')} · "
+            f"распознано сечений {len(self._map_by_number)}")
+        self._refresh_map_plan()
+
+    def _planned_edits(self) -> list[tuple[int, str]]:
+        """Что предстоит поправить на карте: (номер сечения, новое значение)
+        из колонки «Новый номинал» вкладки «Сечения»."""
+        out = []
+        for r in range(self.tbl_sections.rowCount()):
+            it_new = self.tbl_sections.item(r, 6)
+            текст = (it_new.text().strip() if it_new else "")
+            if not текст:
+                continue
+            it_num = self.tbl_sections.item(r, 0)
+            if it_num is None or not it_num.text().strip().isdigit():
+                continue
+            out.append((int(it_num.text().strip()), текст))
+        return out
+
+    def _refresh_map_plan(self):
+        """Список правок с состоянием привязки к карте."""
+        # Пересборка случается и при возврате на вкладку — выбранную подпись
+        # при этом терять нельзя, иначе кнопка «Проставить показанное» гаснет
+        # ровно тогда, когда сотрудник к ней тянется.
+        было = self._map_shown
+        self.list_map_plan.clear()
+        план = self._planned_edits()
+        if было is not None and (было[0], было[1]) not in план:
+            self._map_shown = None
+            self.btn_map_apply_one.setEnabled(False)
+        if not план:
+            item = QListWidgetItem("Ничего не отмечено: впишите новые номиналы "
+                                   "на вкладке «Сечения»")
+            item.setIcon(dot_icon(_DOT["info"]))
+            self.list_map_plan.addItem(item)
+            self.btn_map_apply_unique.setEnabled(False)
+            return
+
+        однозначных = 0
+        for номер, значение in план:
+            места = self._map_by_number.get(номер, [])
+            if len(места) == 1:
+                цвет, хвост = "done", "подпись найдена"
+                однозначных += 1
+            elif len(места) > 1:
+                цвет, хвост = "warn", f"мест на карте: {len(места)} — выберите"
+            else:
+                цвет, хвост = "wait", "подпись не найдена, правьте кликом"
+            item = QListWidgetItem(f"сечение {номер} → {значение} · {хвост}")
+            item.setIcon(dot_icon(_DOT[цвет]))
+            item.setData(Qt.UserRole, (номер, значение))
+            self.list_map_plan.addItem(item)
+        self.btn_map_apply_unique.setEnabled(однозначных > 0
+                                            and self._map_arr is not None)
+
+    def _map_plan_clicked(self, item):
+        """Перейти к подписи сечения; при нескольких местах — к следующему."""
+        данные = item.data(Qt.UserRole)
+        if not данные or self._map_arr is None:
+            return
+        номер, значение = данные
+        места = self._map_by_number.get(номер, [])
+        if not места:
+            self._log(f"Сечение {номер}: подпись на карте не распознана — "
+                      f"кликните по ней сами", "warn")
+            return
+        i = self._map_cycle.get(номер, -1) + 1
+        if i >= len(места):
+            i = 0
+        self._map_cycle[номер] = i
+        подпись = места[i]
+        self.map_view.show_at(*подпись.point, box=подпись.bbox)
+        self._map_shown = (номер, значение, подпись)
+        self.btn_map_apply_one.setEnabled(True)
+        уточнение = f" (место {i + 1} из {len(места)})" if len(места) > 1 else ""
+        self._log(f"Сечение {номер}{уточнение}: подпись показана на карте",
+                  "info")
+
+    @staticmethod
+    def _map_value_text(значение: str) -> str:
+        """Значение в том виде, как оно стоит на схеме: «(6.0)»."""
+        text = (значение or "").strip()
+        if not text.startswith("("):
+            text = f"({text})" if not text.endswith(")") else f"({text}"
+        return text
+
+    def _map_write(self, номер: int, значение: str, подпись) -> bool:
+        """Записать новое значение в подпись сечения на карте."""
+        from repair.map_editor import render_value, render_value_in
+        значение = self._map_value_text(значение)
+        try:
+            if подпись.value_bbox is not None:
+                # Рамка значения известна из распознанной подписи — берём её.
+                # Выращивать рамку от точки нельзя: рядом с подписью стоит
+                # красный крестик замера, и рамка «раздувается» на него.
+                rep = render_value_in(self._map_arr, подпись.value_bbox,
+                                      значение, label=подпись.bbox)
+            else:
+                rep = render_value(self._map_arr, подпись.point, значение)
+        except Exception as e:
+            self._log(f"Сечение {номер}: правка не удалась — {e}", "error")
+            return False
+        self._map_edits.append((подпись.point, None,
+                                f"сечение {номер} → {значение}"))
+        item = QListWidgetItem(f"сечение {номер} → {значение}")
+        item.setIcon(dot_icon(_DOT["done"]))
+        self.list_map_edits.addItem(item)
+        self.lbl_map_before.setPixmap(
+            self._crop_pixmap(self._map_orig, rep["label"]))
+        self.lbl_map_after.setPixmap(
+            self._crop_pixmap(self._map_arr, rep["label"]))
+        self.map_view.set_image(self._np_to_qimage(self._map_arr))
+        self.map_view.show_at(*подпись.point, box=rep["label"])
+        self.btn_map_undo.setEnabled(True)
+        self.btn_map_save.setEnabled(True)
+        return True
+
+    def _map_apply_shown(self):
+        if not self._map_shown:
+            return
+        номер, значение, подпись = self._map_shown
+        if self._map_write(номер, значение, подпись):
+            self._log(f"Сечение {номер}: на карте записано {значение}", "done")
+
+    def _map_apply_unique(self):
+        """
+        Проставить значения там, где подпись сечения на карте одна.
+
+        Места с несколькими одинаковыми сечениями намеренно не трогаются:
+        какое из них заменено, видно только по схеме — решает сотрудник.
+        """
+        сделано = отложено = 0
+        for номер, значение in self._planned_edits():
+            места = self._map_by_number.get(номер, [])
+            if len(места) != 1:
+                отложено += 1
+                continue
+            if self._map_write(номер, значение, места[0]):
+                сделано += 1
+        self._log(f"Карта: проставлено {сделано}"
+                  + (f", отложено {отложено} (несколько мест или подпись "
+                     f"не найдена)" if отложено else ""),
+                  "done" if сделано else "warn")
 
     def _crop_pixmap(self, arr, bbox, pad=30) -> QPixmap:
         h, w = arr.shape[:2]
@@ -961,7 +1534,8 @@ class RepairPage(QWidget):
             return
         lines = ["ЧЕК-ЛИСТ РУЧНОЙ ПРАВКИ (модуль «Ремонт»)", ""]
         lines.append("1. Строка «Сведения о ремонте» (таблица 1 отчёта):")
-        lines.append(f"   {p['svedenia']}")
+        # В чек-лист идёт то, что реально будет записано, — с правкой сотрудника.
+        lines.append(f"   {self._svedenia_text() or p['svedenia']}")
         lines.append("")
         lines.append("2. Листы «Импорт» и «Импорт (ПР)» (одинаково):")
         for ch in p["changes"]:

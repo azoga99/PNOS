@@ -179,6 +179,17 @@ QLineEdit:disabled {
     color: @text_faint@;
 }
 
+/* Поле ввода ВНУТРИ таблицы (редактор ячейки). У обычного QLineEdit отступы
+   7px сверху и снизу плюс рамки — в высоту строки таблицы это не влезает, и
+   текст при вводе обрезается по высоте. Редактору нужны свои отступы. */
+QAbstractItemView QLineEdit,
+QTableWidget QLineEdit,
+QTableView QLineEdit {
+    padding: 0px 4px;
+    border-radius: 3px;
+    border: 1px solid @accent@;
+}
+
 QTextEdit, QPlainTextEdit {
     background-color: @bg_input@;
     border: 1px solid @border@;

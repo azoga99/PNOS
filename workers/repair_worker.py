@@ -166,25 +166,71 @@ class RepairVerifyWorker(QThread):
 
 
 class RepairOcrWorker(QThread):
-    """Распознавание документа (Windows OCR) для предзаполнения реестра.
-    Читаются первые страницы (акт и реестр ИД всегда в начале комплекта)."""
+    """
+    Распознавание документа (Windows OCR) для предзаполнения реестра.
+
+    Для комплекта ИД сначала строится карта разделов (`repair.id_map`), и
+    читаются только нужные страницы: копия акта и удостоверение о качестве
+    ремонта. Прежний способ — «первые шесть страниц» — на комплекте в 131
+    страницу почти всегда промахивался мимо обоих документов.
+
+    Для отдельного акта (2–4 страницы) читается весь файл: первый лист даёт
+    номер и дату акта, последний — таблицу подлежащих замене элементов.
+    """
 
     log = Signal(str)
     info = Signal(str, str)
     finished_ok = Signal(bool)
     result = Signal(object)          # DocInfo
+    map_ready = Signal(object)       # карта разделов ИД (dict) или None
+    # Фрагмент документа, который сотруднику нужно увидеть глазами:
+    # {"page", "полоса", "поворот", "зачем"}. Рукописные даты OCR не читает.
+    zone_hint = Signal(object)
 
-    MAX_PAGES = 6
+    MAX_PAGES = 6                    # запасной путь, когда карта не построена
+    SHORT_DOC = 6                    # столько страниц и меньше — читаем целиком
+
+    # Зоны интереса на листе (доли высоты).
+    ZONE_REPLACEMENTS = (0.70, 1.0)   # таблица «подлежащих замене»
+    ZONE_SIGNATURES = (0.62, 1.0)     # блок подписей реестра ИД
+    ZONE_GRIF = (0.0, 0.28)           # гриф УТВЕРЖДАЮ на листе акта
 
     def __init__(self, pdf_path: str, parent=None):
         super().__init__(parent)
         self.pdf_path = pdf_path
+        self._date_done = ""
+        self._reg_act_date = ""      # дата акта из печатной шапки реестра ИД
+        self._rotations: dict[int, int] = {}
+
+    # ── чтение страниц ───────────────────────────────────────────────
+
+    def _read(self, page: int, total: int, what: str = "") -> list[str]:
+        from repair.ocr import ocr_page, plain_text
+
+        подпись = f" ({what})" if what else ""
+        self.info.emit(f"Распознавание: стр. {page}/{total}{подпись}...", "wait")
+        # Ориентацию подбирает ocr_page: в комплектах ИД повёрнута каждая
+        # восьмая страница, а при 90/270° OCR молча возвращает пустоту.
+        res = ocr_page(self.pdf_path, page, try_all=True)
+        self._rotations[page] = res["rotation"]
+        if res["rotation"]:
+            self.log.emit(f"стр. {page}: страница повёрнута на "
+                          f"{res['rotation']}°, развёрнута для чтения")
+        return plain_text(res).splitlines()
+
+    def _rotation_of(self, page: int) -> int:
+        """Поворот страницы, если она уже распознавалась."""
+        if page in self._rotations:
+            return self._rotations[page]
+        from repair.ocr import ocr_page
+        rot = ocr_page(self.pdf_path, page, try_all=True)["rotation"]
+        self._rotations[page] = rot
+        return rot
 
     def run(self):
         try:
-            from repair.ocr import available, ocr_array
-            from repair.pdf_preview import render_page, page_count
-            from repair.doc_extract import extract_doc_info
+            from repair.ocr import available
+            from repair.pdf_preview import page_count
 
             if not available():
                 self.info.emit("Windows OCR недоступен (нет русского "
@@ -192,14 +238,23 @@ class RepairOcrWorker(QThread):
                 self.finished_ok.emit(False)
                 return
 
-            n = min(page_count(self.pdf_path), self.MAX_PAGES)
-            lines: list[str] = []
-            for i in range(n):
-                self.info.emit(f"Распознавание: стр. {i + 1}/{n}...", "wait")
-                lines += ocr_array(render_page(self.pdf_path, i, scale=2.5))
+            total = page_count(self.pdf_path)
+            self._date_done = self._reg_act_date = ""
+            lines = (self._read_short(total) if total <= self.SHORT_DOC
+                     else self._read_id_set(total))
 
+            from repair.doc_extract import extract_doc_info
+            from repair.dates import act_date
             info = extract_doc_info(lines)
+            # Правило Д2: полная дата грифа УТВЕРЖДАЮ → дата из имени файла
+            # акта → печатная шапка реестра ИД (день грифа вписан от руки и
+            # часто не читается, а в имени комплекта ИД даты обычно нет).
+            info.act_date = act_date(info.act_date, self.pdf_path,
+                                     self._reg_act_date)
+            if self._date_done:
+                info.date_done = self._date_done
             self.result.emit(info)
+
             got = []
             if info.act_numbers:
                 got.append("акты " + ", ".join(info.act_numbers))
@@ -217,6 +272,201 @@ class RepairOcrWorker(QThread):
             import traceback
             self.log.emit(traceback.format_exc())
             self.info.emit(f"Ошибка распознавания: {str(e)[:80]}", "error")
+            self.finished_ok.emit(False)
+
+    # ── короткий документ: отдельный акт ─────────────────────────────
+
+    def _read_short(self, total: int) -> list[str]:
+        self.map_ready.emit(None)
+        lines: list[str] = []
+        for page in range(1, total + 1):
+            lines += self._read(page, total)
+        # Таблица «подлежащих замене» — на последнем листе. Мелкие ячейки
+        # (типоразмер) OCR читает нестабильно, поэтому зона берётся в
+        # несколько проходов с разными масштабами.
+        lines += self._read_replacement_zone(total)
+        return lines
+
+    def _read_zone(self, page: int, полоса: tuple,
+                   rotation: int = 0) -> list[str]:
+        """
+        Зона листа, прочитанная в несколько масштабов.
+
+        Мелкие ячейки (типоразмер) Windows OCR читает нестабильно: «108х6-89х6»
+        верно при 2.2/3.0/3.5 и с ошибкой при 2.5. Несколько проходов дают
+        устойчивый результат.
+        """
+        from repair.ocr import ocr_zone_multi, rows_from_lines
+
+        multi = ocr_zone_multi(self.pdf_path, page, полоса[0], полоса[1],
+                               rotation=rotation)
+        out: list[str] = []
+        for v in multi["варианты"]:
+            # И ячейки по отдельности, и склеенные строки таблицы: в акте
+            # «Переход» и «108х6-89х6» распознаются разными ячейками, и
+            # запись о замене видна только после склейки.
+            out += [ln["text"] for ln in v["lines"]]
+            out += rows_from_lines(v["lines"])
+        return out
+
+    def _read_replacement_zone(self, page: int, rotation: int = 0) -> list[str]:
+        return self._read_zone(page, self.ZONE_REPLACEMENTS, rotation)
+
+    def _read_signatures(self, page: int, rotation: int = 0) -> None:
+        """
+        Блок подписей реестра ИД: правило Д1 плюс подсказка сотруднику.
+
+        Даты там почти всегда рукописные или штампованные, и OCR их не читает.
+        Поэтому: если дата нашлась — подставляем, если нет — просим показать
+        сотруднику именно этот фрагмент, чтобы он вписал её одним взглядом.
+        """
+        from repair.dates import latest_date
+
+        строки = self._read_zone(page, self.ZONE_SIGNATURES, rotation)
+        дата = latest_date(строки)
+        if дата:
+            self._date_done = дата
+            self.info.emit(f"Дата выполнения работ: {дата} "
+                           f"(самая поздняя в блоке подписей реестра)", "done")
+        else:
+            self.info.emit("Дата выполнения работ в блоке подписей рукописная — "
+                           "OCR её не читает, впишите по фрагменту справа", "warn")
+        self.zone_hint.emit({
+            "page": page, "полоса": list(self.ZONE_SIGNATURES),
+            "поворот": rotation, "зачем": "дата выполнения работ",
+            "найдено": дата,
+        })
+
+    # ── комплект ИД: адресное чтение по карте ────────────────────────
+
+    def _read_id_set(self, total: int) -> list[str]:
+        from repair.id_map import (build_page_map, quality_cert_section,
+                                   section_pages, SEC_ACT)
+
+        self.info.emit("Разбор реестра исполнительной документации...", "wait")
+        page_map = build_page_map(self.pdf_path, log=self.log.emit)
+        self.map_ready.emit(page_map)
+
+        if not page_map or not page_map.get("разделы"):
+            self.info.emit("Карта разделов не построена — читаю первые "
+                           f"{self.MAX_PAGES} страниц", "warn")
+            lines = []
+            for page in range(1, min(total, self.MAX_PAGES) + 1):
+                lines += self._read(page, total)
+            return lines
+
+        self.info.emit(
+            f"Реестр разобран: разделов {len(page_map['разделы'])}, "
+            f"смещение {page_map['смещение']} "
+            f"({page_map.get('смещение_источник', '?')})", "done")
+
+        lines: list[str] = []
+        # Шапка реестра даёт номер и дату акта печатным текстом — у части
+        # подрядчиков («ТП Инжиниринг»: «№222-1-309 от 07.07.2023г.») это
+        # единственный автоматический источник даты акта. Строки собираются в
+        # том же виде, в каком они встречаются в документах, чтобы работали
+        # обычные правила разбора.
+        шапка = page_map.get("шапка") or {}
+        акты = шапка.get("акты") or []
+        дата = шапка.get("дата_акта")
+        if дата:
+            # Номер акта в шапке OCR иногда искажает («222-1-ЗО9» кириллицей),
+            # и связать дату с номером по тексту не получается. Дату запоминаем
+            # отдельно — она уйдёт в правило Д2 третьим источником.
+            self._reg_act_date = дата
+        for номер in акты:
+            lines.append(f"Акт ОТН №{номер}"
+                         + (f" от {дата}г." if дата else ""))
+        if шапка.get("линия"):
+            lines.append(f"Линия №{шапка['линия']}")
+        if шапка.get("установка"):
+            lines.append(f"уст.{шапка['установка']}")
+
+        цели: list[tuple[int, str]] = []
+        for page in section_pages(page_map, SEC_ACT, limit=2):
+            цели.append((page, "копия акта"))
+
+        # Лист удостоверения и лист с таблицей замены — не всегда один и тот
+        # же: у «ТП Инжиниринг» таблица вынесена в приложение.
+        удост = page_map.get("удостоверение_страница")
+        if удост:
+            цели.append((удост, "удостоверение о качестве"))
+        замена = page_map.get("замена_страница")
+        if замена and замена != удост:
+            цели.append((замена, "таблица замены"))
+        if not удост and not замена:
+            self.log.emit("Ни удостоверение о качестве, ни таблица замены не "
+                          "найдены — данные о замене придётся внести вручную")
+
+        if not цели:
+            # Названия разделов в реестре могли слипнуться при распознавании.
+            # Но страница копии акта известна: по ней вычислялось смещение.
+            акт = (page_map.get("проверка_смещения") or {}).get("страница_акта")
+            if акт:
+                self.log.emit("Разделы в реестре не опознаны — читаю копию "
+                              f"акта, найденную по заголовку (стр. {акт})")
+                цели = [(акт, "копия акта"), (акт + 1, "копия акта")]
+            else:
+                self.info.emit("Ни один раздел не опознан — читаю первые "
+                               f"{self.MAX_PAGES} страниц", "warn")
+                цели = [(p, "") for p in
+                        range(1, min(total, self.MAX_PAGES) + 1)]
+            цели = [(p, w) for p, w in цели if 1 <= p <= total]
+
+        for page, what in цели:
+            lines += self._read(page, total, what)
+
+        лист_замены = замена or удост
+        if лист_замены:
+            # Таблица «Ремонту подвергались следующие участки» печатная —
+            # лучший источник типоразмеров и марки стали. Лист бывает
+            # повёрнутым, поэтому зону читаем с учётом найденного поворота.
+            поворот = self._rotation_of(лист_замены)
+            lines += self._read_replacement_zone(лист_замены, поворот)
+
+        # Блок подписей реестра: дата выполнения работ (правило Д1).
+        рег = page_map.get("страница_реестра")
+        if рег:
+            self._read_signatures(рег, self._rotation_of(рег))
+        return lines
+
+
+class MapLabelsWorker(QThread):
+    """
+    Поиск подписей сечений на коррозионной карте (фоном).
+
+    Распознавание карты целиком занимает несколько секунд, поэтому выполняется
+    в потоке: интерфейс не должен подвисать после загрузки карты.
+    """
+
+    log = Signal(str)
+    info = Signal(str, str)
+    finished_ok = Signal(bool)
+    result = Signal(object)          # list[MapLabel]
+
+    def __init__(self, arr, parent=None):
+        super().__init__(parent)
+        self._arr = arr
+
+    def run(self):
+        try:
+            from repair.map_labels import find_labels
+
+            подписи = find_labels(self._arr, log=self.log.emit)
+            self.result.emit(подписи)
+            if подписи:
+                номера = sorted({l.number for l in подписи})
+                self.info.emit(
+                    f"На карте распознано сечений: {len(номера)} "
+                    f"(от {номера[0]} до {номера[-1]})", "done")
+            else:
+                self.info.emit("Подписи сечений на карте распознать не удалось "
+                               "— правьте кликом по подписи", "warn")
+            self.finished_ok.emit(True)
+        except Exception as e:
+            import traceback
+            self.log.emit(traceback.format_exc())
+            self.info.emit(f"Ошибка разбора карты: {str(e)[:80]}", "error")
             self.finished_ok.emit(False)
 
 
