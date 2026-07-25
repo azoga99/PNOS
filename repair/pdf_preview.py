@@ -55,6 +55,24 @@ def render_page(path: str, index: int, scale: float = 2.0):
         page.close()
 
 
+def render_zone(path: str, index: int, top: float, bottom: float,
+                rotation: int = 0, scale: float = 2.5):
+    """
+    Горизонтальная полоса страницы (доли высоты, 0..1) → numpy-массив RGB.
+
+    Нужна, чтобы показать сотруднику сразу нужный фрагмент: блок подписей
+    реестра ИД с рукописной датой или гриф УТВЕРЖДАЮ на листе акта — вместо
+    перелистывания комплекта на сотню страниц.
+    """
+    import numpy as np
+
+    arr = render_page(path, index, scale=scale)
+    if rotation:
+        arr = np.rot90(arr, k=rotation // 90)
+    h = arr.shape[0]
+    return arr[int(h * top):int(h * bottom), :, :]
+
+
 def close_all() -> None:
     for _, (_, pdf) in list(_cache.items()):
         try:
