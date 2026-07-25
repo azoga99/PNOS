@@ -76,14 +76,14 @@ def test_c0_no_repair():
 def test_c1_acts_only():
     rec = RepairRecord(id_status=ID_EXPECTED, acts=[ActRef("222-1-5", "01.02.2026")])
     got = build_svedenia([rec])
-    assert got == BASE + ": 01.02.2026 г. Акт ревизии и отбраковки трубопровода № 222-1-5"
+    assert got == BASE + ":\n01.02.2026 г. Акт ревизии и отбраковки трубопровода № 222-1-5"
 
 
 def test_act_without_date_omits_date_part():
     """Дата акта ещё не внесена (черновик) — « г.» с пустой датой не пишется."""
     rec = RepairRecord(id_status=ID_EXPECTED, acts=[ActRef("222-1-5")])
     got = build_svedenia([rec])
-    assert got == BASE + ": Акт ревизии и отбраковки трубопровода № 222-1-5"
+    assert got == BASE + ":\nАкт ревизии и отбраковки трубопровода № 222-1-5"
     assert " г. Акт" not in got
 
 
@@ -91,8 +91,23 @@ def test_c2_one_id():
     rec = RepairRecord(id_status=ID_PRESENT, date_done="10.04.2026",
                        acts=[ActRef("222-1-5", "01.02.2026")])
     got = build_svedenia([rec])
-    assert got == (BASE + ": 10.04.2026 г. проведена замена участков трубопровода: "
+    assert got == (BASE + ":\n10.04.2026 г. проведена замена участков трубопровода:\n"
                    "01.02.2026 г. Акт ревизии и отбраковки трубопровода № 222-1-5")
+
+
+def test_single_replaced_element_uses_singular():
+    """Заменён один элемент — «замена участка», как в готовом отчёте п.2763."""
+    rec = RepairRecord(id_status=ID_PRESENT, date_done="16.04.2026",
+                       acts=[ActRef("222-1-179", "01.04.2026")],
+                       replacements="Переход 108х6-89х6")
+    assert "замена участка трубопровода" in build_svedenia([rec])
+
+
+def test_several_replaced_elements_use_plural():
+    rec = RepairRecord(id_status=ID_PRESENT, date_done="09.04.2026",
+                       acts=[ActRef("222-1-309", "07.07.2023")],
+                       replacements="Труба 89х5; Труба 219х10; Отвод 219х12")
+    assert "замена участков трубопровода" in build_svedenia([rec])
 
 
 def test_c2_two_acts_one_id():
@@ -103,7 +118,61 @@ def test_c2_two_acts_one_id():
     got = build_svedenia([rec])
     assert "1)" not in got
     assert got.count("Акт ревизии") == 2
-    assert got.startswith(BASE + ": 14.04.2026 г. проведена замена")
+    assert got.startswith(BASE + ":\n14.04.2026 г. проведена замена")
+
+
+# ─── Точная сверка с готовыми отчётами ─────────────────────────────────
+# Строки сняты из отчётов ЗЭПБ готовых пунктов (папка «Готовые — копия»).
+# Разделитель в ячейке Word — перенос строки, поэтому и в шаблоне «\n».
+
+def test_matches_finished_report_2763():
+    """С2: один комплект ИД, один заменённый элемент → «участка»."""
+    rec = RepairRecord(id_status=ID_PRESENT, date_done="16.04.2026",
+                       acts=[ActRef("222-1-179", "01.04.2026")],
+                       replacements="Переход 108х6-89х6")
+    assert build_svedenia([rec]) == (
+        "Исполнительная документация в наличии и приложена к техническому "
+        "паспорту на трубопровод:\n"
+        "16.04.2026 г. проведена замена участка трубопровода:\n"
+        "01.04.2026 г. Акт ревизии и отбраковки трубопровода № 222-1-179")
+
+
+def test_matches_finished_report_2701():
+    """С3: два комплекта ИД, нумерация записей и перенос строки."""
+    recs = [
+        RepairRecord(id_status=ID_PRESENT, date_done="13.04.2026",
+                     acts=[ActRef("222-1-84", "24.02.2026")],
+                     replacements="Труба 219х10; Отвод 219х12"),
+        RepairRecord(id_status=ID_PRESENT, date_done="09.04.2026",
+                     acts=[ActRef("222-1-309", "07.07.2023")],
+                     replacements="Труба 89х5; Труба 219х10; Отвод 219х12"),
+    ]
+    assert build_svedenia(recs) == (
+        "Исполнительная документация в наличии и приложена к техническому "
+        "паспорту на трубопровод:\n"
+        "1) 13.04.2026 г. проведена замена участков трубопровода:\n"
+        "24.02.2026 г. Акт ревизии и отбраковки трубопровода № 222-1-84;\n"
+        "2) 09.04.2026 г. проведена замена участков трубопровода:\n"
+        "07.07.2023 г. Акт ревизии и отбраковки трубопровода № 222-1-309")
+
+
+def test_matches_finished_report_2775():
+    """
+    С1: акты есть, ИД ещё нет.
+
+    В готовом отчёте строка заканчивается точкой, в двух других — нет.
+    Точка не ставится: пунктуация в отчётах набивалась вручную и
+    непоследовательна, а поправить строку сотрудник может прямо в
+    предпросмотре.
+    """
+    rec = RepairRecord(id_status=ID_EXPECTED,
+                       acts=[ActRef("222-1-121", "24.03.2026"),
+                             ActRef("222-1-143", "30.03.2026")])
+    assert build_svedenia([rec]) == (
+        "Исполнительная документация в наличии и приложена к техническому "
+        "паспорту на трубопровод:\n"
+        "24.03.2026 г. Акт ревизии и отбраковки трубопровода № 222-1-121;\n"
+        "30.03.2026 г. Акт ревизии и отбраковки трубопровода № 222-1-143")
 
 
 def test_c3_numbered():

@@ -34,15 +34,32 @@ def _acts_joined(record: RepairRecord, sv) -> str:
     return sv["ACT_SEP"].join(parts)
 
 
+def replaced_count(record: RepairRecord) -> int:
+    """
+    Сколько элементов заменено по записи — по колонке «Замена» реестра.
+
+    От этого зависит число в строке отчёта: «замена участка» при одном
+    элементе, «замена участков» при нескольких (сверено с готовыми отчётами
+    п.2763 и п.2701). Колонка не заполнена — считаем, что элементов несколько:
+    так чаще, и формулировка остаётся общей.
+    """
+    текст = (record.replacements or "").replace("\n", ";")
+    части = [p.strip() for p in текст.split(";") if p.strip()]
+    return len(части)
+
+
 def _record_body(record: RepairRecord, sv) -> str:
     """
     Тело одной записи без нумерации:
-      с ИД  → «{дата сдачи} г. проведена замена участков трубопровода: {акты}»
+      с ИД  → «{дата сдачи} г. проведена замена участк(а|ов) трубопровода: {акты}»
       без ИД → «{акты}»
     """
     acts = _acts_joined(record, sv)
     if record.has_id:
-        return sv["REPLACE_PREFIX"].format(date=record.date_done) + acts
+        ключ = ("REPLACE_PREFIX_ONE" if replaced_count(record) == 1
+                else "REPLACE_PREFIX")
+        шаблон = sv.get(ключ) or sv["REPLACE_PREFIX"]
+        return шаблон.format(date=record.date_done) + acts
     return acts
 
 
