@@ -29,15 +29,25 @@ from dataclasses import dataclass, field
 from repair.config import REPAIR_CONFIG
 
 # Номер акта ревизии и отбраковки: «222-1-84», «222-5-04-028» и т.п.
-_ACT_RE = re.compile(r"\b(\d{3}-\d(?:-\d+)+)\b")
-# Сокращение «222-1-143,121» → второй номер наследует префикс.
-_ACT_TAIL_RE = re.compile(r",\s*(\d{2,4})\b")
+# Границы — не \b: в именах встречается слитное «акт222-1-153», а между
+# кириллической буквой и цифрой границы слова нет, и номер терялся.
+_ACT_RE = re.compile(r"(?<![\d-])(\d{3}-\d(?:-\d+)+)(?![\d-])")
+# Сокращение «222-1-143,121» → второй номер наследует префикс. Отрицательный
+# просмотр вперёд отсекает случай «222-1-80,222-1-320», где после запятой
+# начинается ПОЛНЫЙ номер: иначе рождался фантомный акт «222-1-222».
+_ACT_TAIL_RE = re.compile(r",\s*(\d{2,4})(?!\s*-\s*\d)\b")
 # Установка: «36-30», «39-40» (2 цифры - 2 цифры, не часть номера акта).
 _UNIT_RE = re.compile(r"\b(\d{2}-\d{2})\b")
-# Линия/трубопровод: «№6», «№ 122»; приоритетно — после слова «Линия».
-_LINE_RE = re.compile(r"№\s*(\d+)")
-_LINE_WORD_RE = re.compile(r"[Лл]ини\w*\s*№\s*(\d+)")
+# Линия/трубопровод: «№6», «№ 122», «№39-МЦК»; приоритетно — после «Линия».
+# Буквенный суффикс обязателен: «№39-МЦК» — это линия «39-МЦК», а не «39».
+_LINE_TAIL = r"(\d+(?:-[А-Яа-яЁёA-Za-z]+)?)"
+_LINE_RE = re.compile(r"№\s*" + _LINE_TAIL)
+_LINE_WORD_RE = re.compile(r"[Лл]ини\w*\s*№\s*" + _LINE_TAIL)
+# Линия без «№»: «222-1-115 113 39-40 19.03.2026» — одиночное число в остатке.
+_LINE_BARE_RE = re.compile(r"\b(\d{1,4})\b")
 _DATE_RE = re.compile(r"\b(\d{2}\.\d{2}\.\d{4})\b")
+# Хвост выгрузки Я.Диска: «….pdf_v00.100001268600097.pdf».
+_DISK_SUFFIX_RE = re.compile(r"\.pdf_v\d+\.\d+(?=\.pdf$|$)", re.IGNORECASE)
 
 MATCH_OK = "ok"
 MATCH_MISMATCH = "mismatch"
@@ -68,7 +78,7 @@ class RepairDocs:
 
 def parse_doc_filename(filename: str) -> ParsedName:
     """Разобрать имя файла документа ремонта (без пути)."""
-    name = os.path.basename(filename)
+    name = _DISK_SUFFIX_RE.sub("", os.path.basename(filename))
     stem = os.path.splitext(name)[0]
 
     p = ParsedName()
@@ -95,6 +105,10 @@ def parse_doc_filename(filename: str) -> ParsedName:
     if um:
         p.unit = um.group(1)
 
+    dm = _DATE_RE.search(stem)
+    if dm:
+        p.date = dm.group(1)
+
     # Линия: сперва явное «Линия №NNN», иначе «№NNN» в остатке без номеров
     # актов (чтобы «№222-1-143» не принялся за линию «222»).
     lwm = _LINE_WORD_RE.search(stem)
@@ -105,9 +119,19 @@ def parse_doc_filename(filename: str) -> ParsedName:
         if lm:
             p.line = lm.group(1)
 
-    dm = _DATE_RE.search(stem)
-    if dm:
-        p.date = dm.group(1)
+    # Последняя попытка: номер линии пишут и без «№» — «222-1-115 113 39-40
+    # 19.03.2026». Ищем одиночное число в остатке, из которого убраны номер
+    # акта, установка и дата. Только если акт всё-таки найден: иначе любой
+    # «скан 001.pdf» получил бы линию.
+    if not p.line and p.acts:
+        tail = rest
+        if p.unit:
+            tail = tail.replace(p.unit, " ")
+        if p.date:
+            tail = tail.replace(p.date, " ")
+        lb = _LINE_BARE_RE.search(tail)
+        if lb:
+            p.line = lb.group(1)
 
     return p
 

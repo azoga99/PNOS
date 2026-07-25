@@ -53,6 +53,71 @@ def test_parse_no_data():
     assert p.line == ""
 
 
+# ─── Разбор имён: случаи из обучающей выборки (см. «для обучени») ──────
+
+def test_parse_two_full_numbers_after_comma_no_phantom():
+    """п.2700: «222-1-80,222-1-320» — ДВА полных номера, а не сокращение.
+    Правило наследования префикса рождало фантомный акт «222-1-222»."""
+    p = parse_doc_filename("36-30, №3, 222-1-80,222-1-320.pdf")
+    assert p.acts == ["222-1-80", "222-1-320"]
+    assert p.unit == "36-30"
+    assert p.line == "3"
+
+
+def test_parse_line_without_numero_sign():
+    """п.2766: номер линии пишут и без «№» — «222-1-115 113 39-40 …»."""
+    p = parse_doc_filename("222-1-115 113 39-40 19.03.2026.pdf")
+    assert p.acts == ["222-1-115"]
+    assert p.unit == "39-40"
+    assert p.line == "113"
+    assert p.date == "19.03.2026"
+
+
+def test_parse_line_with_letter_suffix():
+    """п.2892 и п.2896: линия «39-МЦК» и «285-МЦК» — суффикс не отбрасывать."""
+    p = parse_doc_filename("222-1-57 №39-МЦК 39-40 19.02.2026.pdf")
+    assert p.line == "39-МЦК"
+    assert p.unit == "39-40"
+
+    p2 = parse_doc_filename("39-40, №285-МЦК, №222-1-196.pdf")
+    assert p2.line == "285-МЦК"
+    assert p2.acts == ["222-1-196"]
+
+
+def test_parse_act_glued_to_word():
+    """п.2795: «акт222-1-153» слитно — между буквой и цифрой нет \\b."""
+    p = parse_doc_filename(
+        "Тр-д №145 Полуотпаренный фильтрат из К-3 в К-4, I-й поток,"
+        "ПКМ,39-40,акт222-1-153.pdf_v00.100001263300097.pdf")
+    assert p.acts == ["222-1-153"]
+    assert p.unit == "39-40"
+    assert p.line == "145"
+
+
+def test_parse_strips_yandex_disk_suffix():
+    """Хвост выгрузки Я.Диска не должен участвовать в разборе."""
+    p = parse_doc_filename(
+        "ИД-Трубопровод №152 Акт №222-1-181.pdf_v00.100001253600097.pdf")
+    assert p.acts == ["222-1-181"]
+    assert p.line == "152"
+
+
+def test_parse_factory_number_is_not_act_or_line():
+    """п.2781: заводской номер «зн №180000303246» — ни акт, ни линия."""
+    p = parse_doc_filename(
+        "Акт №222-1-188 линия №128 зн №180000303246, 39-40 РиМ.pdf")
+    assert p.acts == ["222-1-188"]
+    assert p.line == "128"
+    assert p.unit == "39-40"
+
+
+def test_parse_foreign_number_in_name_ignored():
+    """п.2707: «Указание №1507» не должно стать линией или актом."""
+    p = parse_doc_filename("36-30, №25, №222-1-180, Указание №1507.pdf")
+    assert p.acts == ["222-1-180"]
+    assert p.line == "25"
+
+
 # ─── Светофор привязки ────────────────────────────────────────────────
 
 def test_match_ok():
