@@ -4,14 +4,16 @@
 
 StepCard — компактная карточка шага конвейера: номер-индикатор со статусом,
 название, строка итога, кнопка действия, тонкий прогресс-бар и ховер-анимация
-тени. Только PySide6 — тяжёлых импортов нет.
+тени. SegmentBar — полоса из отдельных линий по этапам работы. DateCellDelegate
+— ячейка таблицы с маской даты. Только PySide6 — тяжёлых импортов нет.
 """
 
 from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QColor, QIcon, QPixmap, QPainter, QBrush
 from PySide6.QtWidgets import (
     QFrame, QLabel, QPushButton, QProgressBar, QHBoxLayout, QVBoxLayout,
-    QGraphicsDropShadowEffect, QSizePolicy, QComboBox,
+    QGraphicsDropShadowEffect, QSizePolicy, QComboBox, QWidget, QLineEdit,
+    QStyledItemDelegate,
 )
 
 
@@ -176,3 +178,105 @@ class StepCard(QFrame):
 
     def set_action_enabled(self, enabled: bool):
         self.btn_action.setEnabled(enabled)
+
+
+# ─── Полоса этапов ────────────────────────────────────────────────────
+
+class SegmentBar(QWidget):
+    """
+    Полоса из отдельных линий: сколько этапов, столько сегментов.
+
+    Обычный прогресс-бар здесь врал бы: число страниц, которые придётся
+    прочитать, заранее неизвестно (модуль ходит по комплекту адресно), а этапы
+    известны всегда. Заполненный сегмент = этап пройден, подсвеченный =
+    выполняется сейчас; под полосой — название текущего этапа.
+
+    Цвета — только из QSS (objectName «segment_line», свойство state).
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._names: list[str] = []
+        self._lines: list[QFrame] = []
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(4)
+        self._row = QHBoxLayout()
+        self._row.setContentsMargins(0, 0, 0, 0)
+        self._row.setSpacing(4)
+        outer.addLayout(self._row)
+        self.lbl = QLabel("")
+        self.lbl.setObjectName("hint")
+        outer.addWidget(self.lbl)
+        self.setVisible(False)
+
+    def set_phases(self, names):
+        """Задать этапы и показать полосу пустой."""
+        for line in self._lines:
+            self._row.removeWidget(line)
+            line.deleteLater()
+        self._lines = []
+        self._names = [str(n) for n in (names or [])]
+        for _ in self._names:
+            line = QFrame()
+            line.setObjectName("segment_line")
+            line.setProperty("state", "idle")
+            line.setFixedHeight(4)
+            line.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            self._row.addWidget(line)
+            self._lines.append(line)
+        self.lbl.setText("")
+        self.setVisible(bool(self._names))
+
+    def set_current(self, index: int, name: str = ""):
+        """Этапы до index — пройдены, index — выполняется."""
+        for i, line in enumerate(self._lines):
+            state = "done" if i < index else ("run" if i == index else "idle")
+            if line.property("state") != state:
+                line.setProperty("state", state)
+                line.style().unpolish(line)
+                line.style().polish(line)
+        подпись = name or (self._names[index] if 0 <= index < len(self._names)
+                           else "")
+        self.lbl.setText(f"{подпись}…" if подпись else "Готово")
+
+    def finish(self):
+        self.set_current(len(self._names))
+
+    def reset(self):
+        self.set_phases([])
+
+
+# ─── Ячейка таблицы с датой ───────────────────────────────────────────
+
+DATE_MASK = "00.00.0000;_"
+
+
+def date_cell_value(text: str) -> str:
+    """
+    Значение поля с маской даты: пустая маска («__.__.____») → пустая строка.
+
+    Без этого в ячейку попадали бы подчёркивания, и дальше по коду они
+    считались бы введённой датой.
+    """
+    s = (text or "").strip()
+    if not any(c.isdigit() for c in s):
+        return ""
+    return s
+
+
+class DateCellDelegate(QStyledItemDelegate):
+    """Редактор ячейки таблицы с жёсткой маской ДД.ММ.ГГГГ (без календаря)."""
+
+    def createEditor(self, parent, option, index):
+        editor = QLineEdit(parent)
+        editor.setInputMask(DATE_MASK)
+        return editor
+
+    def setEditorData(self, editor, index):
+        editor.setText((index.data() or "").strip())
+        editor.setCursorPosition(0)
+
+    def setModelData(self, editor, model, index):
+        model.setData(index, date_cell_value(editor.text()))

@@ -1,0 +1,2486 @@
+{
+ "point": "2775",
+ "sections_old": [
+  {
+   "number": 1,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "4.4",
+    "4.4",
+    "4.6",
+    "4.5"
+   ],
+   "tmin": "4.4"
+  },
+  {
+   "number": 2,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.8",
+    "6.0",
+    "6.0",
+    "5.9"
+   ],
+   "tmin": "5.8"
+  },
+  {
+   "number": 4,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.8",
+    "6.0",
+    "6.0",
+    "6.0"
+   ],
+   "tmin": "5.8"
+  },
+  {
+   "number": 5,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.0",
+    "5.1",
+    "5.2",
+    "5.2"
+   ],
+   "tmin": "5.0"
+  },
+  {
+   "number": 7,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.5",
+    "5.5",
+    "5.7",
+    "5.5"
+   ],
+   "tmin": "5.5"
+  },
+  {
+   "number": 8,
+   "element": "Заглушка",
+   "thickness_nom": "12",
+   "diameter": "159",
+   "measures": [
+    "10.4",
+    "10.6",
+    "10.6",
+    "10.5"
+   ],
+   "tmin": "10.4"
+  },
+  {
+   "number": 11,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.8",
+    "6.0",
+    "6.0",
+    "5.8"
+   ],
+   "tmin": "5.8"
+  },
+  {
+   "number": 12,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "4.4",
+    "4.5",
+    "4.6",
+    "4.5"
+   ],
+   "tmin": "4.4"
+  },
+  {
+   "number": 13,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.7",
+    "5.8",
+    "5.9",
+    "5.7"
+   ],
+   "tmin": "5.7"
+  },
+  {
+   "number": 14,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.9",
+    "5.9",
+    "6.1",
+    "5.9"
+   ],
+   "tmin": "5.9"
+  },
+  {
+   "number": 15,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.6",
+    "5.7",
+    "5.8",
+    "5.7"
+   ],
+   "tmin": "5.6"
+  },
+  {
+   "number": 16,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "6.0",
+    "6.2",
+    "6.2",
+    "6.1"
+   ],
+   "tmin": "6.0"
+  },
+  {
+   "number": 17,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.7",
+    "5.9",
+    "5.9",
+    "5.7"
+   ],
+   "tmin": "5.7"
+  },
+  {
+   "number": 18,
+   "element": "Переход",
+   "thickness_nom": "6 / 10",
+   "diameter": "159 / 108",
+   "measures": [
+    "9.2",
+    "9.2",
+    "9.4",
+    "9.2"
+   ],
+   "tmin": "9.2"
+  },
+  {
+   "number": 19,
+   "element": "Отвод",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.8",
+    "5.9",
+    "6.0",
+    "5.9"
+   ],
+   "tmin": "5.8"
+  },
+  {
+   "number": 20,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.2",
+    "5.3",
+    "5.4",
+    "5.3"
+   ],
+   "tmin": "5.2"
+  },
+  {
+   "number": 24,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.2",
+    "5.3",
+    "5.4",
+    "5.3"
+   ],
+   "tmin": "5.2"
+  },
+  {
+   "number": 25,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "4.1",
+    "4.2",
+    "4.3",
+    "4.3"
+   ],
+   "tmin": "4.1"
+  },
+  {
+   "number": 26,
+   "element": "Отвод",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "6.7",
+    "6.9",
+    "6.9",
+    "6.7"
+   ],
+   "tmin": "6.7"
+  },
+  {
+   "number": 27,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "3.5",
+    "3.5",
+    "3.7",
+    "3.6"
+   ],
+   "tmin": "3.5"
+  },
+  {
+   "number": 28,
+   "element": "Заглушка",
+   "thickness_nom": "7",
+   "diameter": "108",
+   "measures": [
+    "7.4",
+    "7.5",
+    "7.6",
+    "7.4"
+   ],
+   "tmin": "7.4"
+  },
+  {
+   "number": 29,
+   "element": "Труба",
+   "thickness_nom": "9",
+   "diameter": "159",
+   "measures": [
+    "7.3",
+    "7.4",
+    "7.5",
+    "7.5"
+   ],
+   "tmin": "7.3"
+  },
+  {
+   "number": 31,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.4",
+    "5.6",
+    "5.6",
+    "5.6"
+   ],
+   "tmin": "5.4"
+  },
+  {
+   "number": 32,
+   "element": "Отвод",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.5",
+    "5.6",
+    "5.7",
+    "5.6"
+   ],
+   "tmin": "5.5"
+  },
+  {
+   "number": 33,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.0",
+    "5.1",
+    "5.2",
+    "5.0"
+   ],
+   "tmin": "5.0"
+  },
+  {
+   "number": 34,
+   "element": "Отвод",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "4.3",
+    "4.5",
+    "4.5",
+    "4.4"
+   ],
+   "tmin": "4.3"
+  },
+  {
+   "number": 35,
+   "element": "Переход",
+   "thickness_nom": "6 / 8",
+   "diameter": "219 / 159",
+   "measures": [
+    "7.6",
+    "7.6",
+    "7.8",
+    "7.7"
+   ],
+   "tmin": "7.6"
+  },
+  {
+   "number": 36,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "6.0",
+    "6.1",
+    "6.2",
+    "6.2"
+   ],
+   "tmin": "6.0"
+  },
+  {
+   "number": 38,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "4.5",
+    "4.7",
+    "4.7",
+    "4.5"
+   ],
+   "tmin": "4.5"
+  },
+  {
+   "number": 39,
+   "element": "Отвод",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.9",
+    "6.0",
+    "6.1",
+    "5.9"
+   ],
+   "tmin": "5.9"
+  },
+  {
+   "number": 40,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.4",
+    "5.4",
+    "5.6",
+    "5.4"
+   ],
+   "tmin": "5.4"
+  },
+  {
+   "number": 41,
+   "element": "Отвод",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "4.6",
+    "4.6",
+    "4.8",
+    "4.6"
+   ],
+   "tmin": "4.6"
+  },
+  {
+   "number": 43,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "4.3",
+    "4.3",
+    "4.5",
+    "4.3"
+   ],
+   "tmin": "4.3"
+  },
+  {
+   "number": 44,
+   "element": "Переход",
+   "thickness_nom": "6 / 8",
+   "diameter": "159 / 89",
+   "measures": [
+    "5.4",
+    "5.5",
+    "5.6",
+    "5.5"
+   ],
+   "tmin": "5.4"
+  },
+  {
+   "number": 45,
+   "element": "Переход",
+   "thickness_nom": "5 / 6",
+   "diameter": "89 / 57",
+   "measures": [
+    "6.0",
+    "6.0",
+    "6.2",
+    "6.1"
+   ],
+   "tmin": "6.0"
+  },
+  {
+   "number": 46,
+   "element": "Отвод",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.8",
+    "5.0",
+    "5.0",
+    "5.0"
+   ],
+   "tmin": "4.8"
+  },
+  {
+   "number": 47,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "3.4",
+    "3.8",
+    "3.5",
+    "3.6"
+   ],
+   "tmin": "3.4"
+  },
+  {
+   "number": 48,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.0",
+    "5.0",
+    "5.2",
+    "5.0"
+   ],
+   "tmin": "5.0"
+  },
+  {
+   "number": 49,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.8",
+    "6.0",
+    "6.0",
+    "5.8"
+   ],
+   "tmin": "5.8"
+  },
+  {
+   "number": 50,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.0",
+    "5.0",
+    "5.2",
+    "5.2"
+   ],
+   "tmin": "5.0"
+  },
+  {
+   "number": 51,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.8",
+    "5.8",
+    "6.0",
+    "5.8"
+   ],
+   "tmin": "5.8"
+  },
+  {
+   "number": 52,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "4.2",
+    "4.4",
+    "4.4",
+    "4.2"
+   ],
+   "tmin": "4.2"
+  },
+  {
+   "number": 54,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.9",
+    "5.9",
+    "6.1",
+    "5.9"
+   ],
+   "tmin": "5.9"
+  },
+  {
+   "number": 55,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "4.2",
+    "4.2",
+    "4.4",
+    "4.3"
+   ],
+   "tmin": "4.2"
+  },
+  {
+   "number": 56,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "4.8",
+    "5.0",
+    "5.0",
+    "5.0"
+   ],
+   "tmin": "4.8"
+  },
+  {
+   "number": 57,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.6",
+    "5.8",
+    "5.8",
+    "5.8"
+   ],
+   "tmin": "5.6"
+  },
+  {
+   "number": 58,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.5",
+    "5.5",
+    "5.7",
+    "5.7"
+   ],
+   "tmin": "5.5"
+  },
+  {
+   "number": 59,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.5",
+    "5.6",
+    "5.7",
+    "5.7"
+   ],
+   "tmin": "5.5"
+  },
+  {
+   "number": 61,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "3.5",
+    "3.5",
+    "3.7",
+    "3.6"
+   ],
+   "tmin": "3.5"
+  },
+  {
+   "number": 64,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "2.7",
+    "2.9",
+    "2.9",
+    "2.8"
+   ],
+   "tmin": "2.7"
+  },
+  {
+   "number": 65,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "2.9",
+    "2.9",
+    "3.1",
+    "3.1"
+   ],
+   "tmin": "2.9"
+  },
+  {
+   "number": 66,
+   "element": "Переход",
+   "thickness_nom": "5 / 6",
+   "diameter": "108 / 57",
+   "measures": [
+    "5.1",
+    "5.3",
+    "5.3",
+    "5.3"
+   ],
+   "tmin": "5.1"
+  },
+  {
+   "number": 67,
+   "element": "Отвод",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "5.2",
+    "5.2",
+    "5.4",
+    "5.3"
+   ],
+   "tmin": "5.2"
+  },
+  {
+   "number": 68,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.3",
+    "5.5",
+    "5.5",
+    "5.4"
+   ],
+   "tmin": "5.3"
+  },
+  {
+   "number": 69,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.2",
+    "5.3",
+    "5.4",
+    "5.3"
+   ],
+   "tmin": "5.2"
+  },
+  {
+   "number": 70,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "3.8",
+    "4.0",
+    "4.0",
+    "3.9"
+   ],
+   "tmin": "3.8"
+  },
+  {
+   "number": 71,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.5",
+    "5.5",
+    "5.7",
+    "5.7"
+   ],
+   "tmin": "5.5"
+  },
+  {
+   "number": 72,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "4.0",
+    "4.1",
+    "4.2",
+    "4.2"
+   ],
+   "tmin": "4.0"
+  },
+  {
+   "number": 74,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.9",
+    "6.1",
+    "6.1",
+    "6.1"
+   ],
+   "tmin": "5.9"
+  },
+  {
+   "number": 76,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "108",
+   "measures": [
+    "6.0",
+    "6.2",
+    "6.2",
+    "6.2"
+   ],
+   "tmin": "6.0"
+  },
+  {
+   "number": 77,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.6",
+    "5.7",
+    "5.8",
+    "5.7"
+   ],
+   "tmin": "5.6"
+  },
+  {
+   "number": 78,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "108",
+   "measures": [
+    "6.1",
+    "6.2",
+    "6.3",
+    "6.3"
+   ],
+   "tmin": "6.1"
+  },
+  {
+   "number": 79,
+   "element": "Отвод",
+   "thickness_nom": "7",
+   "diameter": "108",
+   "measures": [
+    "6.3",
+    "6.5",
+    "6.5",
+    "6.4"
+   ],
+   "tmin": "6.3"
+  },
+  {
+   "number": 80,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "108",
+   "measures": [
+    "6.5",
+    "6.5",
+    "6.7",
+    "6.7"
+   ],
+   "tmin": "6.5"
+  },
+  {
+   "number": 81,
+   "element": "Труба",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.4",
+    "4.6",
+    "4.6",
+    "4.4"
+   ],
+   "tmin": "4.4"
+  },
+  {
+   "number": 82,
+   "element": "Отвод",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.8",
+    "4.9",
+    "5.0",
+    "4.9"
+   ],
+   "tmin": "4.8"
+  },
+  {
+   "number": 83,
+   "element": "Труба",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.4",
+    "4.4",
+    "4.6",
+    "4.5"
+   ],
+   "tmin": "4.4"
+  },
+  {
+   "number": 84,
+   "element": "Отвод",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.5",
+    "4.7",
+    "4.7",
+    "4.6"
+   ],
+   "tmin": "4.5"
+  },
+  {
+   "number": 85,
+   "element": "Труба",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.5",
+    "4.6",
+    "4.7",
+    "4.6"
+   ],
+   "tmin": "4.5"
+  },
+  {
+   "number": 86,
+   "element": "Труба",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.4",
+    "4.4",
+    "4.6",
+    "4.6"
+   ],
+   "tmin": "4.4"
+  },
+  {
+   "number": 87,
+   "element": "Переход",
+   "thickness_nom": "5 / 6",
+   "diameter": "108 / 57",
+   "measures": [
+    "6.6",
+    "6.8",
+    "6.8",
+    "6.7"
+   ],
+   "tmin": "6.6"
+  },
+  {
+   "number": 88,
+   "element": "Переход",
+   "thickness_nom": "6 / 9",
+   "diameter": "159 / 108",
+   "measures": [
+    "9.4",
+    "9.5",
+    "9.6",
+    "9.6"
+   ],
+   "tmin": "9.4"
+  },
+  {
+   "number": 89,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "4.5",
+    "4.5",
+    "4.7",
+    "4.6"
+   ],
+   "tmin": "4.5"
+  },
+  {
+   "number": 91,
+   "element": "Переход",
+   "thickness_nom": "6 / 9",
+   "diameter": "159 / 108",
+   "measures": [
+    "8.2",
+    "8.3",
+    "8.4",
+    "8.2"
+   ],
+   "tmin": "8.2"
+  },
+  {
+   "number": 92,
+   "element": "Переход",
+   "thickness_nom": "5 / 6",
+   "diameter": "108 / 57",
+   "measures": [
+    "4.9",
+    "4.9",
+    "5.1",
+    "5.1"
+   ],
+   "tmin": "4.9"
+  },
+  {
+   "number": 93,
+   "element": "Отвод",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.8",
+    "4.9",
+    "5.0",
+    "4.8"
+   ],
+   "tmin": "4.8"
+  },
+  {
+   "number": 94,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.4",
+    "5.4",
+    "5.6",
+    "5.5"
+   ],
+   "tmin": "5.4"
+  },
+  {
+   "number": 95,
+   "element": "Переход",
+   "thickness_nom": "7 / 8",
+   "diameter": "219 / 159",
+   "measures": [
+    "8.9",
+    "9.0",
+    "9.1",
+    "9.0"
+   ],
+   "tmin": "8.9"
+  },
+  {
+   "number": 96,
+   "element": "Труба",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.9",
+    "5.1",
+    "5.1",
+    "5.1"
+   ],
+   "tmin": "4.9"
+  },
+  {
+   "number": 97,
+   "element": "Труба",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.5",
+    "4.7",
+    "4.7",
+    "4.5"
+   ],
+   "tmin": "4.5"
+  },
+  {
+   "number": 98,
+   "element": "Труба",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.7",
+    "4.9",
+    "4.9",
+    "4.8"
+   ],
+   "tmin": "4.7"
+  },
+  {
+   "number": 99,
+   "element": "Отвод",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.5",
+    "4.6",
+    "4.7",
+    "4.5"
+   ],
+   "tmin": "4.5"
+  },
+  {
+   "number": 100,
+   "element": "Переход",
+   "thickness_nom": "5 / 6",
+   "diameter": "108 / 57",
+   "measures": [
+    "6.6",
+    "6.8",
+    "6.8",
+    "6.7"
+   ],
+   "tmin": "6.6"
+  },
+  {
+   "number": 101,
+   "element": "Переход",
+   "thickness_nom": "6 / 9",
+   "diameter": "159 / 108",
+   "measures": [
+    "8.0",
+    "8.2",
+    "8.2",
+    "8.2"
+   ],
+   "tmin": "8.0"
+  },
+  {
+   "number": 102,
+   "element": "Переход",
+   "thickness_nom": "8 / 9",
+   "diameter": "219 / 159",
+   "measures": [
+    "7.8",
+    "8.0",
+    "8.0",
+    "7.8"
+   ],
+   "tmin": "7.8"
+  },
+  {
+   "number": 103,
+   "element": "Труба",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.9",
+    "4.9",
+    "5.1",
+    "5.1"
+   ],
+   "tmin": "4.9"
+  },
+  {
+   "number": 104,
+   "element": "Отвод",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "5.4",
+    "5.4",
+    "5.6",
+    "5.4"
+   ],
+   "tmin": "5.4"
+  },
+  {
+   "number": 105,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "57",
+   "measures": [
+    "4.9",
+    "4.9",
+    "5.1",
+    "5.1"
+   ],
+   "tmin": "4.9"
+  },
+  {
+   "number": 106,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "3.9",
+    "4.1",
+    "4.0",
+    "3.9"
+   ],
+   "tmin": "3.9"
+  },
+  {
+   "number": 107,
+   "element": "Бобышка",
+   "thickness_nom": "",
+   "diameter": "45",
+   "measures": [
+    "10.0",
+    "10.7",
+    "10.2",
+    "10.4"
+   ],
+   "tmin": "10.0"
+  },
+  {
+   "number": 108,
+   "element": "Бобышка",
+   "thickness_nom": "",
+   "diameter": "45",
+   "measures": [
+    "9.8",
+    "10.0",
+    "9.9",
+    "10.0"
+   ],
+   "tmin": "9.8"
+  },
+  {
+   "number": 109,
+   "element": "Бобышка",
+   "thickness_nom": "",
+   "diameter": "45",
+   "measures": [
+    "9.9",
+    "10.4",
+    "10.0",
+    "10.2"
+   ],
+   "tmin": "9.9"
+  },
+  {
+   "number": 110,
+   "element": "Бобышка",
+   "thickness_nom": "",
+   "diameter": "45",
+   "measures": [
+    "10.8",
+    "11.4",
+    "11.0",
+    "11.2"
+   ],
+   "tmin": "10.8"
+  },
+  {
+   "number": 111,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "6.0",
+    "6.2",
+    "6.1",
+    "6.0"
+   ],
+   "tmin": "6.0"
+  },
+  {
+   "number": 112,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "108",
+   "measures": [
+    "5.8",
+    "6.1",
+    "5.9",
+    "6.0"
+   ],
+   "tmin": "5.8"
+  }
+ ],
+ "sections_new": [
+  {
+   "number": 1,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "4.4",
+    "4.4",
+    "4.6",
+    "4.5"
+   ],
+   "tmin": "4.4"
+  },
+  {
+   "number": 2,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.8",
+    "6.0",
+    "6.0",
+    "5.9"
+   ],
+   "tmin": "5.8"
+  },
+  {
+   "number": 4,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.8",
+    "6.0",
+    "6.0",
+    "6.0"
+   ],
+   "tmin": "5.8"
+  },
+  {
+   "number": 5,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.0",
+    "5.1",
+    "5.2",
+    "5.2"
+   ],
+   "tmin": "5.0"
+  },
+  {
+   "number": 7,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.5",
+    "5.5",
+    "5.7",
+    "5.5"
+   ],
+   "tmin": "5.5"
+  },
+  {
+   "number": 8,
+   "element": "Заглушка",
+   "thickness_nom": "12",
+   "diameter": "159",
+   "measures": [
+    "10.4",
+    "10.6",
+    "10.6",
+    "10.5"
+   ],
+   "tmin": "10.4"
+  },
+  {
+   "number": 11,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.8",
+    "6.0",
+    "6.0",
+    "5.8"
+   ],
+   "tmin": "5.8"
+  },
+  {
+   "number": 12,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "4.4",
+    "4.5",
+    "4.6",
+    "4.5"
+   ],
+   "tmin": "4.4"
+  },
+  {
+   "number": 13,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.7",
+    "5.8",
+    "5.9",
+    "5.7"
+   ],
+   "tmin": "5.7"
+  },
+  {
+   "number": 14,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.9",
+    "5.9",
+    "6.1",
+    "5.9"
+   ],
+   "tmin": "5.9"
+  },
+  {
+   "number": 15,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.6",
+    "5.7",
+    "5.8",
+    "5.7"
+   ],
+   "tmin": "5.6"
+  },
+  {
+   "number": 16,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "6.0",
+    "6.2",
+    "6.2",
+    "6.1"
+   ],
+   "tmin": "6.0"
+  },
+  {
+   "number": 17,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.7",
+    "5.9",
+    "5.9",
+    "5.7"
+   ],
+   "tmin": "5.7"
+  },
+  {
+   "number": 18,
+   "element": "Переход",
+   "thickness_nom": "6 / 10",
+   "diameter": "159 / 108",
+   "measures": [
+    "9.2",
+    "9.2",
+    "9.4",
+    "9.2"
+   ],
+   "tmin": "9.2"
+  },
+  {
+   "number": 19,
+   "element": "Отвод",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.8",
+    "5.9",
+    "6.0",
+    "5.9"
+   ],
+   "tmin": "5.8"
+  },
+  {
+   "number": 20,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.2",
+    "5.3",
+    "5.4",
+    "5.3"
+   ],
+   "tmin": "5.2"
+  },
+  {
+   "number": 24,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.2",
+    "5.3",
+    "5.4",
+    "5.3"
+   ],
+   "tmin": "5.2"
+  },
+  {
+   "number": 25,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "4.1",
+    "4.2",
+    "4.3",
+    "4.3"
+   ],
+   "tmin": "4.1"
+  },
+  {
+   "number": 26,
+   "element": "Отвод",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "6.7",
+    "6.9",
+    "6.9",
+    "6.7"
+   ],
+   "tmin": "6.7"
+  },
+  {
+   "number": 27,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "3.5",
+    "3.5",
+    "3.7",
+    "3.6"
+   ],
+   "tmin": "3.5"
+  },
+  {
+   "number": 28,
+   "element": "Заглушка",
+   "thickness_nom": "7",
+   "diameter": "108",
+   "measures": [
+    "7.4",
+    "7.5",
+    "7.6",
+    "7.4"
+   ],
+   "tmin": "7.4"
+  },
+  {
+   "number": 29,
+   "element": "Труба",
+   "thickness_nom": "9",
+   "diameter": "159",
+   "measures": [
+    "7.3",
+    "7.4",
+    "7.5",
+    "7.5"
+   ],
+   "tmin": "7.3"
+  },
+  {
+   "number": 31,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.4",
+    "5.6",
+    "5.6",
+    "5.6"
+   ],
+   "tmin": "5.4"
+  },
+  {
+   "number": 32,
+   "element": "Отвод",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.5",
+    "5.6",
+    "5.7",
+    "5.6"
+   ],
+   "tmin": "5.5"
+  },
+  {
+   "number": 33,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.0",
+    "5.1",
+    "5.2",
+    "5.0"
+   ],
+   "tmin": "5.0"
+  },
+  {
+   "number": 34,
+   "element": "Отвод",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "4.3",
+    "4.5",
+    "4.5",
+    "4.4"
+   ],
+   "tmin": "4.3"
+  },
+  {
+   "number": 35,
+   "element": "Переход",
+   "thickness_nom": "6 / 8",
+   "diameter": "219 / 159",
+   "measures": [
+    "7.6",
+    "7.6",
+    "7.8",
+    "7.7"
+   ],
+   "tmin": "7.6"
+  },
+  {
+   "number": 36,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "6.0",
+    "6.1",
+    "6.2",
+    "6.2"
+   ],
+   "tmin": "6.0"
+  },
+  {
+   "number": 38,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "4.5",
+    "4.7",
+    "4.7",
+    "4.5"
+   ],
+   "tmin": "4.5"
+  },
+  {
+   "number": 39,
+   "element": "Отвод",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.9",
+    "6.0",
+    "6.1",
+    "5.9"
+   ],
+   "tmin": "5.9"
+  },
+  {
+   "number": 40,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.4",
+    "5.4",
+    "5.6",
+    "5.4"
+   ],
+   "tmin": "5.4"
+  },
+  {
+   "number": 41,
+   "element": "Отвод",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "4.6",
+    "4.6",
+    "4.8",
+    "4.6"
+   ],
+   "tmin": "4.6"
+  },
+  {
+   "number": 43,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "4.3",
+    "4.3",
+    "4.5",
+    "4.3"
+   ],
+   "tmin": "4.3"
+  },
+  {
+   "number": 44,
+   "element": "Переход",
+   "thickness_nom": "6 / 8",
+   "diameter": "159 / 89",
+   "measures": [
+    "5.4",
+    "5.5",
+    "5.6",
+    "5.5"
+   ],
+   "tmin": "5.4"
+  },
+  {
+   "number": 45,
+   "element": "Переход",
+   "thickness_nom": "5 / 6",
+   "diameter": "89 / 57",
+   "measures": [
+    "6.0",
+    "6.0",
+    "6.2",
+    "6.1"
+   ],
+   "tmin": "6.0"
+  },
+  {
+   "number": 46,
+   "element": "Отвод",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.8",
+    "5.0",
+    "5.0",
+    "5.0"
+   ],
+   "tmin": "4.8"
+  },
+  {
+   "number": 47,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "6.0",
+    "6.0",
+    "6.0",
+    "6.0"
+   ],
+   "tmin": "6.0"
+  },
+  {
+   "number": 48,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.0",
+    "5.0",
+    "5.2",
+    "5.0"
+   ],
+   "tmin": "5.0"
+  },
+  {
+   "number": 49,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.8",
+    "6.0",
+    "6.0",
+    "5.8"
+   ],
+   "tmin": "5.8"
+  },
+  {
+   "number": 50,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.0",
+    "5.0",
+    "5.2",
+    "5.2"
+   ],
+   "tmin": "5.0"
+  },
+  {
+   "number": 51,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.8",
+    "5.8",
+    "6.0",
+    "5.8"
+   ],
+   "tmin": "5.8"
+  },
+  {
+   "number": 52,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "4.2",
+    "4.4",
+    "4.4",
+    "4.2"
+   ],
+   "tmin": "4.2"
+  },
+  {
+   "number": 54,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.9",
+    "5.9",
+    "6.1",
+    "5.9"
+   ],
+   "tmin": "5.9"
+  },
+  {
+   "number": 55,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "4.2",
+    "4.2",
+    "4.4",
+    "4.3"
+   ],
+   "tmin": "4.2"
+  },
+  {
+   "number": 56,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "4.8",
+    "5.0",
+    "5.0",
+    "5.0"
+   ],
+   "tmin": "4.8"
+  },
+  {
+   "number": 57,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.6",
+    "5.8",
+    "5.8",
+    "5.8"
+   ],
+   "tmin": "5.6"
+  },
+  {
+   "number": 58,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.5",
+    "5.5",
+    "5.7",
+    "5.7"
+   ],
+   "tmin": "5.5"
+  },
+  {
+   "number": 59,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.5",
+    "5.6",
+    "5.7",
+    "5.7"
+   ],
+   "tmin": "5.5"
+  },
+  {
+   "number": 61,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "3.5",
+    "3.5",
+    "3.7",
+    "3.6"
+   ],
+   "tmin": "3.5"
+  },
+  {
+   "number": 64,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "6.0",
+    "6.0",
+    "6.0",
+    "6.0"
+   ],
+   "tmin": "6.0"
+  },
+  {
+   "number": 65,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "6.0",
+    "6.0",
+    "6.0",
+    "6.0"
+   ],
+   "tmin": "6.0"
+  },
+  {
+   "number": 66,
+   "element": "Переход",
+   "thickness_nom": "5 / 6",
+   "diameter": "108 / 57",
+   "measures": [
+    "5.1",
+    "5.3",
+    "5.3",
+    "5.3"
+   ],
+   "tmin": "5.1"
+  },
+  {
+   "number": 67,
+   "element": "Отвод",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "5.2",
+    "5.2",
+    "5.4",
+    "5.3"
+   ],
+   "tmin": "5.2"
+  },
+  {
+   "number": 68,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "6.0",
+    "6.0",
+    "6.0",
+    "6.0"
+   ],
+   "tmin": "6.0"
+  },
+  {
+   "number": 69,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.2",
+    "5.3",
+    "5.4",
+    "5.3"
+   ],
+   "tmin": "5.2"
+  },
+  {
+   "number": 70,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "3.8",
+    "4.0",
+    "4.0",
+    "3.9"
+   ],
+   "tmin": "3.8"
+  },
+  {
+   "number": 71,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.5",
+    "5.5",
+    "5.7",
+    "5.7"
+   ],
+   "tmin": "5.5"
+  },
+  {
+   "number": 72,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "4.0",
+    "4.1",
+    "4.2",
+    "4.2"
+   ],
+   "tmin": "4.0"
+  },
+  {
+   "number": 74,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.9",
+    "6.1",
+    "6.1",
+    "6.1"
+   ],
+   "tmin": "5.9"
+  },
+  {
+   "number": 76,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "108",
+   "measures": [
+    "6.0",
+    "6.2",
+    "6.2",
+    "6.2"
+   ],
+   "tmin": "6.0"
+  },
+  {
+   "number": 77,
+   "element": "Отвод",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "5.6",
+    "5.7",
+    "5.8",
+    "5.7"
+   ],
+   "tmin": "5.6"
+  },
+  {
+   "number": 78,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "108",
+   "measures": [
+    "6.1",
+    "6.2",
+    "6.3",
+    "6.3"
+   ],
+   "tmin": "6.1"
+  },
+  {
+   "number": 79,
+   "element": "Отвод",
+   "thickness_nom": "7",
+   "diameter": "108",
+   "measures": [
+    "6.3",
+    "6.5",
+    "6.5",
+    "6.4"
+   ],
+   "tmin": "6.3"
+  },
+  {
+   "number": 80,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "108",
+   "measures": [
+    "6.5",
+    "6.5",
+    "6.7",
+    "6.7"
+   ],
+   "tmin": "6.5"
+  },
+  {
+   "number": 81,
+   "element": "Труба",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.4",
+    "4.6",
+    "4.6",
+    "4.4"
+   ],
+   "tmin": "4.4"
+  },
+  {
+   "number": 82,
+   "element": "Отвод",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.8",
+    "4.9",
+    "5.0",
+    "4.9"
+   ],
+   "tmin": "4.8"
+  },
+  {
+   "number": 83,
+   "element": "Труба",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.4",
+    "4.4",
+    "4.6",
+    "4.5"
+   ],
+   "tmin": "4.4"
+  },
+  {
+   "number": 84,
+   "element": "Отвод",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.5",
+    "4.7",
+    "4.7",
+    "4.6"
+   ],
+   "tmin": "4.5"
+  },
+  {
+   "number": 85,
+   "element": "Труба",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.5",
+    "4.6",
+    "4.7",
+    "4.6"
+   ],
+   "tmin": "4.5"
+  },
+  {
+   "number": 86,
+   "element": "Труба",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.4",
+    "4.4",
+    "4.6",
+    "4.6"
+   ],
+   "tmin": "4.4"
+  },
+  {
+   "number": 87,
+   "element": "Переход",
+   "thickness_nom": "5 / 6",
+   "diameter": "108 / 57",
+   "measures": [
+    "6.6",
+    "6.8",
+    "6.8",
+    "6.7"
+   ],
+   "tmin": "6.6"
+  },
+  {
+   "number": 88,
+   "element": "Переход",
+   "thickness_nom": "6 / 9",
+   "diameter": "159 / 108",
+   "measures": [
+    "9.4",
+    "9.5",
+    "9.6",
+    "9.6"
+   ],
+   "tmin": "9.4"
+  },
+  {
+   "number": 89,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "4.5",
+    "4.5",
+    "4.7",
+    "4.6"
+   ],
+   "tmin": "4.5"
+  },
+  {
+   "number": 91,
+   "element": "Переход",
+   "thickness_nom": "6 / 9",
+   "diameter": "159 / 108",
+   "measures": [
+    "8.2",
+    "8.3",
+    "8.4",
+    "8.2"
+   ],
+   "tmin": "8.2"
+  },
+  {
+   "number": 92,
+   "element": "Переход",
+   "thickness_nom": "5 / 6",
+   "diameter": "108 / 57",
+   "measures": [
+    "4.9",
+    "4.9",
+    "5.1",
+    "5.1"
+   ],
+   "tmin": "4.9"
+  },
+  {
+   "number": 93,
+   "element": "Отвод",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.8",
+    "4.9",
+    "5.0",
+    "4.8"
+   ],
+   "tmin": "4.8"
+  },
+  {
+   "number": 94,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "159",
+   "measures": [
+    "5.4",
+    "5.4",
+    "5.6",
+    "5.5"
+   ],
+   "tmin": "5.4"
+  },
+  {
+   "number": 95,
+   "element": "Переход",
+   "thickness_nom": "7 / 8",
+   "diameter": "219 / 159",
+   "measures": [
+    "8.9",
+    "9.0",
+    "9.1",
+    "9.0"
+   ],
+   "tmin": "8.9"
+  },
+  {
+   "number": 96,
+   "element": "Труба",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.9",
+    "5.1",
+    "5.1",
+    "5.1"
+   ],
+   "tmin": "4.9"
+  },
+  {
+   "number": 97,
+   "element": "Труба",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.5",
+    "4.7",
+    "4.7",
+    "4.5"
+   ],
+   "tmin": "4.5"
+  },
+  {
+   "number": 98,
+   "element": "Труба",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.7",
+    "4.9",
+    "4.9",
+    "4.8"
+   ],
+   "tmin": "4.7"
+  },
+  {
+   "number": 99,
+   "element": "Отвод",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.5",
+    "4.6",
+    "4.7",
+    "4.5"
+   ],
+   "tmin": "4.5"
+  },
+  {
+   "number": 100,
+   "element": "Переход",
+   "thickness_nom": "5 / 6",
+   "diameter": "108 / 57",
+   "measures": [
+    "6.6",
+    "6.8",
+    "6.8",
+    "6.7"
+   ],
+   "tmin": "6.6"
+  },
+  {
+   "number": 101,
+   "element": "Переход",
+   "thickness_nom": "6 / 9",
+   "diameter": "159 / 108",
+   "measures": [
+    "8.0",
+    "8.2",
+    "8.2",
+    "8.2"
+   ],
+   "tmin": "8.0"
+  },
+  {
+   "number": 102,
+   "element": "Переход",
+   "thickness_nom": "8 / 9",
+   "diameter": "219 / 159",
+   "measures": [
+    "7.8",
+    "8.0",
+    "8.0",
+    "7.8"
+   ],
+   "tmin": "7.8"
+  },
+  {
+   "number": 103,
+   "element": "Труба",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "4.9",
+    "4.9",
+    "5.1",
+    "5.1"
+   ],
+   "tmin": "4.9"
+  },
+  {
+   "number": 104,
+   "element": "Отвод",
+   "thickness_nom": "5",
+   "diameter": "57",
+   "measures": [
+    "5.4",
+    "5.4",
+    "5.6",
+    "5.4"
+   ],
+   "tmin": "5.4"
+  },
+  {
+   "number": 105,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "57",
+   "measures": [
+    "4.9",
+    "4.9",
+    "5.1",
+    "5.1"
+   ],
+   "tmin": "4.9"
+  },
+  {
+   "number": 106,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "6.0",
+    "6.0",
+    "6.0",
+    "6.0"
+   ],
+   "tmin": "6.0"
+  },
+  {
+   "number": 107,
+   "element": "Бобышка",
+   "thickness_nom": "",
+   "diameter": "45",
+   "measures": [
+    "10.0",
+    "10.7",
+    "10.2",
+    "10.4"
+   ],
+   "tmin": "10.0"
+  },
+  {
+   "number": 108,
+   "element": "Бобышка",
+   "thickness_nom": "",
+   "diameter": "45",
+   "measures": [
+    "9.8",
+    "10.0",
+    "9.9",
+    "10.0"
+   ],
+   "tmin": "9.8"
+  },
+  {
+   "number": 109,
+   "element": "Бобышка",
+   "thickness_nom": "",
+   "diameter": "45",
+   "measures": [
+    "9.9",
+    "10.4",
+    "10.0",
+    "10.2"
+   ],
+   "tmin": "9.9"
+  },
+  {
+   "number": 110,
+   "element": "Бобышка",
+   "thickness_nom": "",
+   "diameter": "45",
+   "measures": [
+    "10.8",
+    "11.4",
+    "11.0",
+    "11.2"
+   ],
+   "tmin": "10.8"
+  },
+  {
+   "number": 111,
+   "element": "Труба",
+   "thickness_nom": "6",
+   "diameter": "108",
+   "measures": [
+    "6.0",
+    "6.2",
+    "6.1",
+    "6.0"
+   ],
+   "tmin": "6.0"
+  },
+  {
+   "number": 112,
+   "element": "Труба",
+   "thickness_nom": "7",
+   "diameter": "108",
+   "measures": [
+    "5.8",
+    "6.1",
+    "5.9",
+    "6.0"
+   ],
+   "tmin": "5.8"
+  }
+ ],
+ "replaced": {
+  "47": 6.0,
+  "64": 6.0,
+  "65": 6.0,
+  "68": 6.0,
+  "106": 6.0
+ },
+ "perehod": {},
+ "svedenia_new": "Исполнительная документация в наличии и приложена к техническому паспорту на трубопровод: 24.03.2026 г. Акт ревизии и отбраковки трубопровода № 222-1-121;30.03.2026 г. Акт ревизии и отбраковки трубопровода № 222-1-143."
+}

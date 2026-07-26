@@ -179,6 +179,17 @@ QLineEdit:disabled {
     color: @text_faint@;
 }
 
+/* Поле ввода ВНУТРИ таблицы (редактор ячейки). У обычного QLineEdit отступы
+   7px сверху и снизу плюс рамки — в высоту строки таблицы это не влезает, и
+   текст при вводе обрезается по высоте. Редактору нужны свои отступы. */
+QAbstractItemView QLineEdit,
+QTableWidget QLineEdit,
+QTableView QLineEdit {
+    padding: 0px 4px;
+    border-radius: 3px;
+    border: 1px solid @accent@;
+}
+
 QTextEdit, QPlainTextEdit {
     background-color: @bg_input@;
     border: 1px solid @border@;
@@ -310,6 +321,42 @@ QLabel#hint {
 QLabel#field_note {
     color: @text_muted@;
     font-size: 11px;
+}
+
+/* Состояние записи модуля «Ремонт». Пока не нажата «Применить выбранное»,
+   согласованные изменения живут только на экране — это должно быть видно,
+   иначе пункт уходит в дальнейшие этапы со старыми замерами. */
+QLabel#apply_state {
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    color: @text_secondary@;
+}
+
+QLabel#apply_state[state="wait"] {
+    color: @warn@;
+    background-color: @warn_bg@;
+    border: 1px solid @warn_border@;
+}
+
+QLabel#apply_state[state="done"] {
+    color: @success@;
+}
+
+/* Полоса этапов (SegmentBar): линия на каждый этап работы. Пройденные —
+   зелёные, текущий — акцентный, остальные — цвета рамки. */
+QFrame#segment_line {
+    border: none;
+    border-radius: 2px;
+    background-color: @border@;
+}
+
+QFrame#segment_line[state="run"] {
+    background-color: @accent@;
+}
+
+QFrame#segment_line[state="done"] {
+    background-color: @success@;
 }
 
 QFrame#h_divider {

@@ -23,6 +23,7 @@ import win32con
 
 from config import CONFIG
 from status_manager import get_stage_status, set_stage_status, is_point_blocked
+from workers.win_dialogs import describe_dialogs
 
 def safe_close_com(obj, save=False):
     """Безопасное закрытие COM-объекта (книги или документа)."""
@@ -99,13 +100,13 @@ class WordDialogKiller:
                     # Пробуем несколько способов нажать кнопку
                     win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, win32con.VK_RETURN, 0)
                     win32gui.PostMessage(hwnd, win32con.WM_KEYUP, win32con.VK_RETURN, 0)
-                    
+
                     # Жесткий метод если PostMessage не сработал
                     win32gui.SetForegroundWindow(hwnd)
                     import win32com.client
                     shell = win32com.client.Dispatch("WScript.Shell")
                     shell.SendKeys("~") # Enter
-                    
+
                     self.count += 1
         except Exception:
             pass
@@ -201,6 +202,33 @@ class Stage4Worker(QThread):
 
     def cancel(self):
         self._is_cancelled = True
+
+    MERGE_WATCHDOG_SEC = 20
+
+    def _merge_watchdog(self, word_pid: int) -> threading.Event:
+        """
+        Сторож долгого COM-вызова: через MERGE_WATCHDOG_SEC пишет в журнал,
+        какие диалоги Word висят на экране. Возвращает Event — вызывающая
+        сторона взводит его, когда вызов вернулся.
+
+        Нужен для диагностики: диалог с непривычной раскладкой кнопок охотник
+        закрыть не сможет, и без такой записи этап выглядит просто зависшим.
+        """
+        done = threading.Event()
+
+        def _watch():
+            if done.wait(self.MERGE_WATCHDOG_SEC):
+                return
+            окна = describe_dialogs(word_pid)
+            if окна:
+                self.log.emit("   ⏳ [Word] Привязка данных идёт дольше обычного; "
+                              "на экране диалоги: " + "; ".join(окна))
+            else:
+                self.log.emit("   ⏳ [Word] Привязка данных идёт дольше обычного, "
+                              "диалогов не видно — ждём Word.")
+
+        threading.Thread(target=_watch, daemon=True).start()
+        return done
 
     def _find_specification_file(self, p_folder: str) -> str | None:
         """Ищет файл 'Спецификация трубопровода.docx' в папке Первичка."""
@@ -735,12 +763,22 @@ class Stage4Worker(QThread):
                         # Даем DialogKiller шанс
                         time.sleep(0.5)
                         
-                        doc.MailMerge.OpenDataSource(
-                            Name=clean_source_path,
-                            SQLStatement="SELECT * FROM [экспорт$]",
-                            SubType=1 # SubTypeAccess
-                        )
-                        
+                        # Сторож: если привязка встала, в журнале должно быть
+                        # видно, какое окно висит. Word показывает здесь
+                        # подтверждение SQL-команды, а охотник гасит его только
+                        # когда окно ПНОС активно — иначе этап просто стоит, и
+                        # без этой записи причина не видна.
+                        watchdog = self._merge_watchdog(wd_dk.word_pid)
+                        try:
+                            doc.MailMerge.OpenDataSource(
+                                Name=clean_source_path,
+                                SQLStatement="SELECT * FROM [экспорт$]",
+                                SubType=1 # SubTypeAccess
+                            )
+                        finally:
+                            watchdog.set()
+
+
                         # "Заморозка" данных
                         doc.Fields.Update()
                         doc.MailMerge.ViewMailMergeFieldCodes = False
@@ -819,6 +857,27 @@ class Stage4Worker(QThread):
                         tmp = os.path.join(p_folder, "CleanSource.xlsx")
                         if os.path.exists(tmp): os.remove(tmp)
                     except Exception: pass
+
+                # --- Строка «Сведения о ремонте» ---
+                # COM-объекты закрыты выше, файлы разблокированы: читаем реестр
+                # (лист «Ремонт») и вписываем строку в готовый отчёт. Модуль
+                # «Ремонт» опционален — его отсутствие не должно ломать этап.
+                try:
+                    from repair.registry import read_registry
+                    from repair.svedenia import build_svedenia
+                    from repair.word_writer import write_svedenia
+                    xlsm_p = find_file(p_folder, (".xls", ".xlsx", ".xlsm"))
+                    records = read_registry(xlsm_p) if xlsm_p else []
+                    if records:
+                        report_p = find_report_file(p_folder)
+                        if report_p and write_svedenia(report_p, build_svedenia(records)):
+                            self.log.emit("   ✓ [Ремонт] Строка «Сведения о ремонте» "
+                                          "записана в отчёт")
+                        elif report_p:
+                            self.log.emit("   ⚠ [Ремонт] Строка «Сведения о ремонте» "
+                                          "в отчёте не найдена")
+                except Exception as e:
+                    self.log.emit(f"   ⚠ [Ремонт] Строку «Сведения» записать не удалось: {e}")
 
                 pct = 10 + int((i + 1) / len(point_folders) * 85)
                 self.progress.emit(min(pct, 95))

@@ -479,6 +479,31 @@ class Stage6Worker(QThread):
                         except Exception:
                             pass
 
+                # --- Авто-верификация пункта с ремонтом (самый конец) ---
+                # Здесь отчёт полностью готов (задвижки уже удалены на этапе 6),
+                # поэтому проверка достоверна. Модуль «Ремонт» опционален.
+                try:
+                    from repair.detect import find_repair_docs
+                    if find_repair_docs(p_folder).has_repair:
+                        from repair.verifier import verify_point
+                        findings = verify_point(p_folder)
+                        errs = [f for f in findings if f.level == "error"]
+                        warns = [f for f in findings if f.level == "warn"]
+                        set_stage_status(p_folder, "repair_findings",
+                                         [(f.level, f.code, f.message) for f in findings])
+                        for f in errs + warns:
+                            self.log.emit(f"   [Ремонт·проверка {f.code}] {f.message}")
+                        if errs:
+                            self.info.emit(f"{p_name}: ремонт — проверка нашла "
+                                           f"{len(errs)} ошибок, см. журнал", "error")
+                        elif warns:
+                            self.info.emit(f"{p_name}: ремонт — {len(warns)} "
+                                           f"предупреждений", "warn")
+                        else:
+                            self.info.emit(f"{p_name}: ремонт согласован", "done")
+                except Exception as e:
+                    self.log.emit(f"   ⚠ [Ремонт] Авто-проверка не выполнена: {e}")
+
                 report_data.append(row)
                 self.progress.emit(20 + int((i + 1) / len(point_folders) * 80))
 
