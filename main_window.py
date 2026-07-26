@@ -187,8 +187,9 @@ class MainWindow(QMainWindow):
     PAGE_OVERVIEW = 2   # объединённая страница «Обзор и отчёт»
     PAGE_FIXREPORTS = 3  # автономная «Правка отчётов» (вне конвейера)
     PAGE_ANALYTICS = 4   # автономный «Анализ пунктов» (вне конвейера)
-    PAGE_REPAIR = 5      # автономный «Ремонт» (вне конвейера; ветка repair-module)
-    PAGE_SETTINGS = 6
+    PAGE_SETTINGS = 5
+    # Отдельной страницы «Ремонт» нет: модуль живёт внутри «Ручного контроля»
+    # (кнопка «Внести данные по ремонту» у пункта с ремонтом).
 
     # UI-шаг -> ключ статуса в .pnos_status.json (учитывает сдвиг воркеров)
     STEP_STATUS_KEYS = {1: "stage1", 2: "stage2", 3: "manual3",
@@ -280,29 +281,17 @@ class MainWindow(QMainWindow):
             ("Обзор и отчёт", self.PAGE_OVERVIEW),
             ("Правка отчётов", self.PAGE_FIXREPORTS),
             ("Анализ пунктов", self.PAGE_ANALYTICS),
-            ("Ремонт", self.PAGE_REPAIR),
         ]
-        # «Ремонт» как отдельная страница временно неактивна: функционал
-        # переезжает в этап «Ручной контроль». Код страницы сохранён (запасная
-        # мастерская для правки готовых пунктов), кнопка выключена.
-        disabled_pages = {self.PAGE_REPAIR}
         self._nav_buttons = {}
         nav_box = QVBoxLayout()
         nav_box.setContentsMargins(0, 12, 0, 0)
         nav_box.setSpacing(2)
         for caption, page_idx in nav_specs:
-            if page_idx in disabled_pages:
-                caption += "  (в разработке)"
             btn = QPushButton(caption)
             btn.setObjectName("nav_button")
             btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
             btn.clicked.connect(lambda checked, i=page_idx: self._switch_page(i))
-            if page_idx in disabled_pages:
-                btn.setEnabled(False)
-                btn.setCursor(Qt.ArrowCursor)
-                btn.setToolTip("Раздел в разработке: ремонт встраивается "
-                               "в этап «Ручной контроль».")
             self._nav_buttons[page_idx] = btn
             nav_box.addWidget(btn)
         nav_holder = QWidget()
@@ -377,9 +366,6 @@ class MainWindow(QMainWindow):
         self.page_analytics = QWidget()
         self._setup_analytics_page()
         self.pages_stack.addWidget(self.page_analytics)
-
-        self.page_repair = RepairPage()
-        self.pages_stack.addWidget(self.page_repair)
 
         self.page_settings = SettingsPage()
         self.pages_stack.addWidget(self.page_settings)
@@ -1045,17 +1031,23 @@ class MainWindow(QMainWindow):
         self.manual_repair_banner.setObjectName("settings_panel")
         rb = QHBoxLayout(self.manual_repair_banner)
         rb.setContentsMargins(14, 10, 14, 10)
-        lbl_rep = QLabel("У этого пункта есть ремонт (акты отбраковки / "
-                         "исполнительная). Внесите данные ремонта — они "
-                         "запишутся вместе с паспортом.")
-        lbl_rep.setObjectName("hint")
-        lbl_rep.setWordWrap(True)
-        rb.addWidget(lbl_rep, 1)
+        self.manual_repair_hint = QLabel("")
+        self.manual_repair_hint.setObjectName("hint")
+        self.manual_repair_hint.setWordWrap(True)
+        rb.addWidget(self.manual_repair_hint, 1)
         self.manual_btn_repair = QPushButton("Внести данные по ремонту")
         self.manual_btn_repair.setObjectName("card_button")
         self.manual_btn_repair.setCursor(Qt.PointingHandCursor)
         self.manual_btn_repair.clicked.connect(self._open_repair_for_current)
         rb.addWidget(self.manual_btn_repair, 0)
+        # Модуль — не единственный путь: пункт можно оформить как раньше,
+        # руками в Excel, Word и графическом редакторе. Кнопка ничего не пишет
+        # в артефакты, она снимает пункт с модуля и открывает его папку.
+        self.manual_btn_repair_old = QPushButton("Оформить по старому")
+        self.manual_btn_repair_old.setObjectName("ghost_button")
+        self.manual_btn_repair_old.setCursor(Qt.PointingHandCursor)
+        self.manual_btn_repair_old.clicked.connect(self._repair_old_way)
+        rb.addWidget(self.manual_btn_repair_old, 0)
         form.addWidget(self.manual_repair_banner)
         self.manual_repair_banner.setVisible(False)
 
@@ -1162,15 +1154,19 @@ class MainWindow(QMainWindow):
             _, state = self._manual_point_state(folder, pt)
             label = pt["name"]
             has_repair = not pt["invalid"] and self._point_has_repair(folder)
+            вручную = has_repair and self._repair_is_manual(folder)
             if has_repair:
-                label += "   • ремонт"
+                label += "   • ремонт (вручную)" if вручную else "   • ремонт"
             item = QListWidgetItem(label)
             item.setIcon(dot_icon(state_colors.get(state, STATUS_COLORS["idle"]), 12))
             item.setData(Qt.UserRole, folder)
             item.setData(Qt.UserRole + 1, state)
             if has_repair:
-                item.setToolTip("У пункта есть документы ремонта — при "
-                                "заполнении внесите данные ремонта")
+                item.setToolTip(
+                    "Пункт оформляется по старому — ремонт вносится вручную"
+                    if вручную else
+                    "У пункта есть документы ремонта — при заполнении внесите "
+                    "данные ремонта")
             if pt["invalid"]:
                 item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
             self.manual_point_list.addItem(item)
@@ -1251,10 +1247,106 @@ class MainWindow(QMainWindow):
         except Exception:
             return False
 
+    @staticmethod
+    def _repair_is_manual(folder) -> bool:
+        """Пункт отмечен «оформляется по старому» (руками, без модуля)."""
+        from status_manager import get_status_value
+        return bool(get_status_value(folder, "repair_manual", False))
+
+    def _update_repair_banner(self, folder):
+        """Баннер ремонта: приглашение в модуль либо отметка «по старому»."""
+        if not folder or not self._point_has_repair(folder):
+            self.manual_repair_banner.setVisible(False)
+            return
+        по_старому = self._repair_is_manual(folder)
+        if по_старому:
+            self.manual_repair_hint.setText(
+                "Ремонт этого пункта оформляется по старому — вручную в Excel, "
+                "Word и графическом редакторе. Модуль в файлы пункта ничего не "
+                "пишет.")
+            self.manual_btn_repair.setText("Всё-таки внести через модуль")
+            self.manual_btn_repair_old.setText("Открыть папку пункта")
+        else:
+            self.manual_repair_hint.setText(
+                "У этого пункта есть ремонт (акты отбраковки / исполнительная). "
+                "Внесите данные ремонта — они запишутся вместе с паспортом. "
+                "Либо оформите пункт по старому, вручную.")
+            self.manual_btn_repair.setText("Внести данные по ремонту")
+            self.manual_btn_repair_old.setText("Оформить по старому")
+        self.manual_repair_banner.setVisible(True)
+
+    def _repair_old_way(self):
+        """
+        Отметить пункт как оформляемый вручную и открыть его папку.
+
+        Ничего не записывает в книгу, отчёт и карту: смысл кнопки ровно в том,
+        чтобы модуль к пункту не притрагивался. Отметка живёт в
+        `.pnos_status.json` (ключ `repair_manual`) и снимается той же кнопкой.
+        """
+        folder = self.manual_current
+        if not folder:
+            return
+        from status_manager import set_stage_status
+
+        if self._repair_is_manual(folder):
+            os.startfile(folder)                      # уже отмечен — просто папка
+            return
+
+        ответ = QMessageBox.question(
+            self, "Оформить по старому",
+            f"Пункт {os.path.basename(folder)} будет оформляться вручную.\n\n"
+            f"Модуль «Ремонт» не тронет ни лист «Импорт», ни лист «Ремонт», "
+            f"ни строку «Сведения о ремонте» в отчёте, ни коррозионную карту — "
+            f"всё это правите сами, как раньше.\n\n"
+            f"Отметка снимается этой же кнопкой. Продолжить?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if ответ != QMessageBox.Yes:
+            return
+
+        set_stage_status(folder, "repair_manual", True)
+        try:
+            from repair.safety import append_journal
+            append_journal(folder, "Ремонт оформляется по старому (вручную)", [
+                "модуль «Ремонт» в файлы пункта не пишет",
+                "вручную: лист «Импорт» (замеры заменённых сечений), "
+                "строка «Сведения о ремонте» в таблице 1 отчёта, "
+                "коррозионная карта (Первичка)",
+            ])
+        except Exception as e:
+            self._add_activity(3, f"Журнал ремонта не дописан: {e}", "warn")
+
+        self._add_activity(
+            3, f"Пункт {os.path.basename(folder)}: ремонт оформляется по "
+               f"старому — модуль его не трогает", "info")
+        self._update_repair_banner(folder)
+        self._refresh_repair_marks()
+        os.startfile(folder)
+
+    def _refresh_repair_marks(self):
+        """Обновить пометки ремонта в списке пунктов без полной перезагрузки."""
+        for i in range(self.manual_point_list.count()):
+            it = self.manual_point_list.item(i)
+            folder = it.data(Qt.UserRole)
+            if not folder or "• ремонт" not in it.text():
+                continue
+            имя = it.text().split("   •")[0]
+            it.setText(имя + ("   • ремонт (вручную)"
+                              if self._repair_is_manual(folder)
+                              else "   • ремонт"))
+
     def _open_repair_for_current(self):
         folder = self.manual_current
         if not folder:
             return
+        if self._repair_is_manual(folder):
+            # Возврат в модуль: отметка снимается, дальше обычный путь.
+            from status_manager import set_stage_status
+            set_stage_status(folder, "repair_manual", False)
+            self._add_activity(
+                3, f"Пункт {os.path.basename(folder)}: ремонт снова ведётся "
+                   f"через модуль", "info")
+            self._update_repair_banner(folder)
+            self._refresh_repair_marks()
         self.manual_repair_title.setText(
             f"Ремонт · пункт {os.path.basename(folder)}")
         self.manual_repair_panel.load_point(folder)
@@ -1268,7 +1360,7 @@ class MainWindow(QMainWindow):
         self._manual_loading = True
         try:
             self.manual_form_title.setText(f"Пункт {os.path.basename(folder)}")
-            self.manual_repair_banner.setVisible(self._point_has_repair(folder))
+            self._update_repair_banner(folder)
             if folder in self.manual_drafts:
                 values = self.manual_drafts[folder]
             else:
