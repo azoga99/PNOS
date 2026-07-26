@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QTextEdit, QCheckBox,
 )
 
-from widgets import dot_icon
+from widgets import dot_icon, SegmentBar, DateCellDelegate
 
 
 class MapView(QGraphicsView):
@@ -118,6 +118,9 @@ CHECKLIST_NAME = "_чек-лист_ремонта.txt"
 COL_NUM, COL_ELEM, COL_T, COL_D, COL_MEAS, COL_MIN = range(6)
 COL_NEW_T, COL_NEW_D, COL_NEW_M = 6, 7, 8
 NEW_COLS = (COL_NEW_T, COL_NEW_D, COL_NEW_M)
+
+# Колонки таблицы реестра (колонка «№» на экран не выводится).
+REG_COL_DATE_DONE = 1      # «Дата выполнения» — вводится по маске
 
 
 class RepairPage(QWidget):
@@ -277,6 +280,9 @@ class RepairPage(QWidget):
         self.btn_ocr.clicked.connect(lambda: self._doc_ocr(force=True))
         nav.addWidget(self.btn_ocr)
         prev_col.addLayout(nav)
+        # Полоса этапов распознавания — под превью, где и появится кроп даты.
+        self.seg_ocr = SegmentBar()
+        prev_col.addWidget(self.seg_ocr)
         docs_row.addLayout(prev_col, 1)
         v1.addLayout(docs_row, 1)
         lbl_reg = QLabel("Реестр ремонтов (лист «Ремонт»; запись = комплект ИД)")
@@ -292,6 +298,12 @@ class RepairPage(QWidget):
         # Высота строки с запасом: в неё встаёт редактор ячейки, иначе текст
         # при вводе обрезается по высоте.
         self.tbl_registry.verticalHeader().setDefaultSectionSize(30)
+        # «Дата выполнения» вводится по маске ДД.ММ.ГГГГ: её вписывают руками
+        # по кропу блока подписей, и формат должен быть единственно возможным.
+        # «Даты актов» маской не закрываем — там бывает несколько дат через «;».
+        self._date_delegate = DateCellDelegate(self.tbl_registry)
+        self.tbl_registry.setItemDelegateForColumn(
+            REG_COL_DATE_DONE, self._date_delegate)
         v1.addWidget(self.tbl_registry, 1)
         row1 = QHBoxLayout()
         for text, slot in (("Добавить запись", self._reg_add),
@@ -738,6 +750,8 @@ class RepairPage(QWidget):
         w.result.connect(self._on_ocr)
         w.map_ready.connect(self._on_id_map)
         w.zone_hint.connect(self._on_zone_hint)
+        w.phases.connect(self.seg_ocr.set_phases)
+        w.phase.connect(self.seg_ocr.set_current)
         w.finished_ok.connect(self._on_ocr_finished)
         self._workers["ocr"] = w
         w.start()
@@ -745,9 +759,13 @@ class RepairPage(QWidget):
     def _on_ocr_finished(self, ok: bool):
         self._ocr_running = False
         self.btn_ocr.setEnabled(True)
-        if not ok and self._doc_path:
-            # Не получилось — пусть следующее открытие документа попробует снова.
-            self._ocr_done.discard(self._doc_path)
+        if ok:
+            self.seg_ocr.finish()
+        else:
+            self.seg_ocr.reset()
+            if self._doc_path:
+                # Не получилось — пусть следующее открытие попробует снова.
+                self._ocr_done.discard(self._doc_path)
 
     def _on_id_map(self, page_map):
         """Карта разделов комплекта ИД: показываем, где что лежит."""
@@ -795,8 +813,26 @@ class RepairPage(QWidget):
             if not hint.get("найдено"):
                 self._log(f"Впишите «{подпись}» в реестр по этому фрагменту "
                           f"(стр. {hint['page']})", "wait")
+                self._focus_date_cell()
         except Exception as e:
             self._log(f"Фрагмент не показан: {e}", "warn")
+
+    def _focus_date_cell(self):
+        """
+        Поставить курсор в пустую ячейку «Дата выполнения» и открыть редактор.
+
+        Кроп показан — остаётся набрать цифры; маска сама расставит точки.
+        Ячейку с уже введённой датой не трогаем.
+        """
+        for r in range(self.tbl_registry.rowCount()):
+            it = self.tbl_registry.item(r, REG_COL_DATE_DONE)
+            if it is None:
+                continue
+            if it.text().strip():
+                continue
+            self.tbl_registry.setCurrentCell(r, REG_COL_DATE_DONE)
+            self.tbl_registry.editItem(it)
+            return
 
     def _on_ocr(self, info):
         from repair.doc_extract import merge_into_records

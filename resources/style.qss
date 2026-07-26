@@ -343,6 +343,22 @@ QLabel#apply_state[state="done"] {
     color: @success@;
 }
 
+/* Полоса этапов (SegmentBar): линия на каждый этап работы. Пройденные —
+   зелёные, текущий — акцентный, остальные — цвета рамки. */
+QFrame#segment_line {
+    border: none;
+    border-radius: 2px;
+    background-color: @border@;
+}
+
+QFrame#segment_line[state="run"] {
+    background-color: @accent@;
+}
+
+QFrame#segment_line[state="done"] {
+    background-color: @success@;
+}
+
 QFrame#h_divider {
     background-color: @border@;
     min-height: 1px;

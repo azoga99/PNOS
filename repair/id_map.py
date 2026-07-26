@@ -535,11 +535,15 @@ def _similar(text: str, phrase: str) -> int:
     return int(fuzz.partial_ratio(phrase.lower(), text.lower()))
 
 
-def build_page_map(pdf_path: str, log=None) -> dict | None:
+def build_page_map(pdf_path: str, log=None, on_phase=None) -> dict | None:
     """
     Карта комплекта ИД: где реестр, какое смещение, какие разделы на каких
     страницах PDF. Возвращает None, если реестр не найден (это не ошибка —
     бывают комплекты без реестра).
+
+    `on_phase(название)` — необязательный колбэк для полосы этапов в интерфейсе.
+    Поиск реестра — самый долгий кусок распознавания (до MAX_SCAN страниц с
+    подбором поворота), и без отметки полоса стояла бы на месте.
     """
     from repair.ocr import ocr_page, plain_text
     from repair.pdf_preview import page_count
@@ -548,6 +552,11 @@ def build_page_map(pdf_path: str, log=None) -> dict | None:
         if log:
             log(msg)
 
+    def phase(name):
+        if on_phase:
+            on_phase(name)
+
+    phase("Реестр ИД")
     total = page_count(pdf_path)
     scanned, кандидаты = {}, []
     for n in range(1, min(MAX_SCAN, total) + 1):
@@ -567,6 +576,7 @@ def build_page_map(pdf_path: str, log=None) -> dict | None:
 
     say(f"Реестр ИД на стр. {reg_page}: строк {len(reg['строки'])}, "
         f"качество разбора «{reg['качество']['оценка']}»")
+    phase("Карта разделов")
 
     def read(page: int) -> str:
         res = scanned.get(page) or ocr_page(pdf_path, page, try_all=True)

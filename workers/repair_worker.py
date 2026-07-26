@@ -186,9 +186,19 @@ class RepairOcrWorker(QThread):
     # Фрагмент документа, который сотруднику нужно увидеть глазами:
     # {"page", "полоса", "поворот", "зачем"}. Рукописные даты OCR не читает.
     zone_hint = Signal(object)
+    # Полоса этапов: список названий один раз в начале, затем номер текущего.
+    # Обычный процент здесь врал бы — сколько страниц придётся прочитать,
+    # заранее неизвестно, комплект читается адресно.
+    phases = Signal(list)
+    phase = Signal(int, str)
 
     MAX_PAGES = 6                    # запасной путь, когда карта не построена
     SHORT_DOC = 6                    # столько страниц и меньше — читаем целиком
+
+    # Этапы распознавания — по ним заполняется полоса.
+    PHASES_ACT = ("Листы акта", "Таблица замены")
+    PHASES_ID = ("Реестр ИД", "Карта разделов", "Копия акта",
+                 "Таблица замены", "Блок подписей")
 
     # Зоны интереса на листе (доли высоты).
     ZONE_REPLACEMENTS = (0.70, 1.0)   # таблица «подлежащих замене»
@@ -201,6 +211,15 @@ class RepairOcrWorker(QThread):
         self._date_done = ""
         self._reg_act_date = ""      # дата акта из печатной шапки реестра ИД
         self._rotations: dict[int, int] = {}
+        self._phases: tuple = ()
+        # Кроп для сотрудника показываем в самом конце: к этому времени реестр
+        # уже дозаполнен распознанным, и курсор можно ставить прямо в ячейку.
+        self._pending_hint = None
+
+    def _set_phase(self, name: str):
+        """Отметить текущий этап на полосе (по названию из набора этапов)."""
+        if name in self._phases:
+            self.phase.emit(self._phases.index(name), name)
 
     # ── чтение страниц ───────────────────────────────────────────────
 
@@ -240,7 +259,11 @@ class RepairOcrWorker(QThread):
 
             total = page_count(self.pdf_path)
             self._date_done = self._reg_act_date = ""
-            lines = (self._read_short(total) if total <= self.SHORT_DOC
+            self._pending_hint = None
+            короткий = total <= self.SHORT_DOC
+            self._phases = self.PHASES_ACT if короткий else self.PHASES_ID
+            self.phases.emit(list(self._phases))
+            lines = (self._read_short(total) if короткий
                      else self._read_id_set(total))
 
             from repair.doc_extract import extract_doc_info
@@ -254,6 +277,11 @@ class RepairOcrWorker(QThread):
             if self._date_done:
                 info.date_done = self._date_done
             self.result.emit(info)
+            self.phase.emit(len(self._phases), "")
+            # Кроп — последним: реестр уже заполнен, и страница может сразу
+            # поставить курсор в ячейку даты.
+            if self._pending_hint:
+                self.zone_hint.emit(self._pending_hint)
 
             got = []
             if info.act_numbers:
@@ -278,12 +306,14 @@ class RepairOcrWorker(QThread):
 
     def _read_short(self, total: int) -> list[str]:
         self.map_ready.emit(None)
+        self._set_phase("Листы акта")
         lines: list[str] = []
         for page in range(1, total + 1):
             lines += self._read(page, total)
         # Таблица «подлежащих замене» — на последнем листе. Мелкие ячейки
         # (типоразмер) OCR читает нестабильно, поэтому зона берётся в
         # несколько проходов с разными масштабами.
+        self._set_phase("Таблица замены")
         lines += self._read_replacement_zone(total)
         return lines
 
@@ -331,11 +361,11 @@ class RepairOcrWorker(QThread):
         else:
             self.info.emit("Дата выполнения работ в блоке подписей рукописная — "
                            "OCR её не читает, впишите по фрагменту справа", "warn")
-        self.zone_hint.emit({
+        self._pending_hint = {
             "page": page, "полоса": list(self.ZONE_SIGNATURES),
             "поворот": rotation, "зачем": "дата выполнения работ",
             "найдено": дата,
-        })
+        }
 
     # ── комплект ИД: адресное чтение по карте ────────────────────────
 
@@ -344,12 +374,16 @@ class RepairOcrWorker(QThread):
                                    section_pages, SEC_ACT)
 
         self.info.emit("Разбор реестра исполнительной документации...", "wait")
-        page_map = build_page_map(self.pdf_path, log=self.log.emit)
+        # Этапы «Реестр ИД» и «Карта разделов» отмечает сам build_page_map —
+        # он единственный знает, когда реестр найден.
+        page_map = build_page_map(self.pdf_path, log=self.log.emit,
+                                  on_phase=self._set_phase)
         self.map_ready.emit(page_map)
 
         if not page_map or not page_map.get("разделы"):
             self.info.emit("Карта разделов не построена — читаю первые "
                            f"{self.MAX_PAGES} страниц", "warn")
+            self._set_phase("Копия акта")
             lines = []
             for page in range(1, min(total, self.MAX_PAGES) + 1):
                 lines += self._read(page, total)
@@ -413,10 +447,12 @@ class RepairOcrWorker(QThread):
                         range(1, min(total, self.MAX_PAGES) + 1)]
             цели = [(p, w) for p, w in цели if 1 <= p <= total]
 
+        self._set_phase("Копия акта")
         for page, what in цели:
             lines += self._read(page, total, what)
 
         лист_замены = замена or удост
+        self._set_phase("Таблица замены")
         if лист_замены:
             # Таблица «Ремонту подвергались следующие участки» печатная —
             # лучший источник типоразмеров и марки стали. Лист бывает
@@ -426,6 +462,7 @@ class RepairOcrWorker(QThread):
 
         # Блок подписей реестра: дата выполнения работ (правило Д1).
         рег = page_map.get("страница_реестра")
+        self._set_phase("Блок подписей")
         if рег:
             self._read_signatures(рег, self._rotation_of(рег))
         return lines

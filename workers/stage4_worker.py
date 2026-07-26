@@ -23,6 +23,9 @@ import win32con
 
 from config import CONFIG
 from status_manager import get_stage_status, set_stage_status, is_point_blocked
+from workers.win_dialogs import (
+    click_dialog_button, dialog_buttons, describe_dialogs,
+)
 
 def safe_close_com(obj, save=False):
     """Безопасное закрытие COM-объекта (книги или документа)."""
@@ -44,13 +47,21 @@ import win32process
 
 
 class WordDialogKiller:
-    """Охотник за окнами: нажимает Enter (Да) на любом диалоговом окне процесса Word."""
+    """
+    Охотник за окнами: жмёт «Да»/«ОК» на диалоговых окнах процесса Word.
+
+    Кнопка нажимается сообщением (см. workers.win_dialogs) — без фокуса и без
+    вывода окна на передний план. Прежний способ (SetForegroundWindow плюс
+    SendKeys) работал только когда ПНОС сам был активен, и слияние на этапе
+    «Создание отчёта» стояло, пока пользователь не кликнет по окну программы.
+    """
     def __init__(self, log_callback, word_pid: int = 0):
         self._stop = threading.Event()
         self._t = None
         self.count = 0
         self.log_callback = log_callback
         self.word_pid = word_pid  # PID чтобы ловить только его диалоги
+        self._seen = set()        # заголовки, о которых уже писали в лог
 
     def start(self):
         self._t = threading.Thread(target=self._run, daemon=True)
@@ -91,22 +102,35 @@ class WordDialogKiller:
             )
             matches_sql_title = any(k in title for k in keywords)
 
-            if matches_word_pid or matches_sql_title:
-                title_log = title if title else "[Без заголовка]"
-                # Логируем только если это реально похоже на диалог выбора (чтобы не спамить)
-                if "выбор" in title or "таблиц" in title or "select" in title or "sql" in title or matches_word_pid:
-                    self.log_callback(f"   [DialogKiller] Вижу окно '{title_log}' (PID match: {matches_word_pid}), нажимаем Enter...")
-                    # Пробуем несколько способов нажать кнопку
-                    win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, win32con.VK_RETURN, 0)
-                    win32gui.PostMessage(hwnd, win32con.WM_KEYUP, win32con.VK_RETURN, 0)
-                    
-                    # Жесткий метод если PostMessage не сработал
-                    win32gui.SetForegroundWindow(hwnd)
-                    import win32com.client
-                    shell = win32com.client.Dispatch("WScript.Shell")
-                    shell.SendKeys("~") # Enter
-                    
-                    self.count += 1
+            if not (matches_word_pid or matches_sql_title):
+                return True
+
+            # Класс окна не проверяем: в разных версиях Word диалоги бывают не
+            # только «#32770». Признак диалога — наличие кнопок «Да»/«ОК»;
+            # у главного окна Word таких дочерних кнопок нет.
+            кнопки = dialog_buttons(hwnd)
+            if not кнопки:
+                return True
+
+            # Логируем каждый заголовок один раз — иначе журнал забивается:
+            # охотник обходит окна семь раз в секунду.
+            новый = title not in self._seen
+            self._seen.add(title)
+            нажата = click_dialog_button(
+                hwnd, log=self.log_callback if новый else None)
+            if нажата:
+                self.count += 1
+                return True
+
+            # Кнопки есть, но утвердительной среди них нет — пробуем прежний
+            # способ, вдруг у диалога нестандартная раскладка.
+            win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, win32con.VK_RETURN, 0)
+            win32gui.PostMessage(hwnd, win32con.WM_KEYUP, win32con.VK_RETURN, 0)
+            if новый:
+                подписи = ", ".join(f"«{c}»" for _, c in кнопки)
+                self.log_callback(
+                    f"   [DialogKiller] диалог «{title or '[без заголовка]'}»: "
+                    f"утвердительной кнопки нет (есть: {подписи}), послан Enter")
         except Exception:
             pass
         return True
@@ -201,6 +225,33 @@ class Stage4Worker(QThread):
 
     def cancel(self):
         self._is_cancelled = True
+
+    MERGE_WATCHDOG_SEC = 20
+
+    def _merge_watchdog(self, word_pid: int) -> threading.Event:
+        """
+        Сторож долгого COM-вызова: через MERGE_WATCHDOG_SEC пишет в журнал,
+        какие диалоги Word висят на экране. Возвращает Event — вызывающая
+        сторона взводит его, когда вызов вернулся.
+
+        Нужен для диагностики: диалог с непривычной раскладкой кнопок охотник
+        закрыть не сможет, и без такой записи этап выглядит просто зависшим.
+        """
+        done = threading.Event()
+
+        def _watch():
+            if done.wait(self.MERGE_WATCHDOG_SEC):
+                return
+            окна = describe_dialogs(word_pid)
+            if окна:
+                self.log.emit("   ⏳ [Word] Привязка данных идёт дольше обычного; "
+                              "на экране диалоги: " + "; ".join(окна))
+            else:
+                self.log.emit("   ⏳ [Word] Привязка данных идёт дольше обычного, "
+                              "диалогов не видно — ждём Word.")
+
+        threading.Thread(target=_watch, daemon=True).start()
+        return done
 
     def _find_specification_file(self, p_folder: str) -> str | None:
         """Ищет файл 'Спецификация трубопровода.docx' в папке Первичка."""
@@ -735,12 +786,20 @@ class Stage4Worker(QThread):
                         # Даем DialogKiller шанс
                         time.sleep(0.5)
                         
-                        doc.MailMerge.OpenDataSource(
-                            Name=clean_source_path,
-                            SQLStatement="SELECT * FROM [экспорт$]",
-                            SubType=1 # SubTypeAccess
-                        )
-                        
+                        # Сторож: если привязка встала, в журнале должно быть
+                        # видно, какое окно висит, — иначе этап выглядит просто
+                        # зависшим (так и было, пока диалог ждал фокуса).
+                        watchdog = self._merge_watchdog(wd_dk.word_pid)
+                        try:
+                            doc.MailMerge.OpenDataSource(
+                                Name=clean_source_path,
+                                SQLStatement="SELECT * FROM [экспорт$]",
+                                SubType=1 # SubTypeAccess
+                            )
+                        finally:
+                            watchdog.set()
+
+
                         # "Заморозка" данных
                         doc.Fields.Update()
                         doc.MailMerge.ViewMailMergeFieldCodes = False
