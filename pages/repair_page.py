@@ -135,16 +135,16 @@ class RepairPage(QWidget):
         self._sved_generated = ""
         self._sved_edited = False
         self._sved_programmatic = False
-        # состояние вкладки «Карта»
-        self._map_path: str | None = None
-        self._map_orig = None          # numpy-массив исходной карты
-        self._map_arr = None           # numpy-массив с правками
-        self._map_edits: list = []     # [(label_xy, donor_xy, описание)]
-        self._map_pending = None       # первый клик пары (label_xy)
-        self._map_labels: list = []    # подписи сечений, найденные на карте
-        self._map_by_number: dict = {} # номер сечения → список подписей
-        self._map_shown = None         # (номер, новое значение, подпись) на экране
+        # Состояние вкладки «Карта». Карта бывает из нескольких листов, поэтому
+        # всё, что относится к изображению, живёт в списке листов:
+        #   {"path", "num", "arr", "labels", "by_number", "edits"}
+        # Исходный массив листа не храним: лист весит до 37 МБ, а откат
+        # перечитывает файл с диска — это редкая операция.
+        self._sheets: list[dict] = []
+        self._sheet_idx = 0            # какой лист показан
+        self._map_shown = None         # (номер, значение, лист, подпись) на экране
         self._map_cycle: dict = {}     # номер → какое из мест показано
+        self._map_dirty = False        # есть ли несохранённые правки
         # состояние превью документа (вкладка 1)
         self._doc_path: str | None = None
         self._doc_page_idx = 0
@@ -481,9 +481,24 @@ class RepairPage(QWidget):
         tab_map = QWidget()
         v4 = QHBoxLayout(tab_map)
         v4.setSpacing(8)
+
+        map_col = QVBoxLayout()
+        map_col.setSpacing(6)
+        # Переключатель листов: карта пункта бывает разбита на 2–3 листа.
+        # При одном листе ряд скрыт — вид остаётся прежним.
+        self.row_sheets = QHBoxLayout()
+        self.row_sheets.setSpacing(4)
+        self._sheet_buttons: list = []
+        self.wid_sheets = QWidget()
+        self.wid_sheets.setLayout(self.row_sheets)
+        self.wid_sheets.setVisible(False)
+        map_col.addWidget(self.wid_sheets)
         self.map_view = MapView()
         self.map_view.clicked.connect(self._on_map_clicked)
-        v4.addWidget(self.map_view, 1)
+        map_col.addWidget(self.map_view, 1)
+        self.seg_map = SegmentBar()
+        map_col.addWidget(self.seg_map)
+        v4.addLayout(map_col, 1)
 
         side = QVBoxLayout()
         side.setSpacing(6)
@@ -1359,25 +1374,23 @@ class RepairPage(QWidget):
     # ═════════════════════════════ Карта ══════════════════════════════
 
     @staticmethod
-    def _find_map_path(folder: str) -> str | None:
-        """Рабочая карта пункта: Первичка/NNNN.png (оригинал ОТН «NNNN..png»
-        не трогается никогда)."""
-        import re
+    def _find_map_paths(folder: str) -> list[str]:
+        """
+        Рабочие листы коррозионной карты пункта, по порядку.
+
+        Карта бывает разбита на 2–3 листа («2704_1.png», «2704_2.png»), а рядом
+        лежат исходники ОТН с лишней точкой в имени («2704._1.png») — их правка
+        запрещена. Отбор и порядок — в repair.map_sheets, там же он и покрыт
+        тестами на реальных наборах имён.
+        """
         from repair.detect import _find_subfolder
+        from repair.map_sheets import working_map_files
+
         perv = _find_subfolder(folder, "Первичка")
         if not perv:
-            return None
-        m = re.search(r"(\d+)", os.path.basename(folder))
-        num = m.group(1) if m else None
-        cands = []
-        for f in sorted(os.listdir(perv)):
-            if not f.lower().endswith(".png") or f.lower().endswith("..png"):
-                continue
-            p = os.path.join(perv, f)
-            if num and os.path.splitext(f)[0] == num:
-                return p
-            cands.append(p)
-        return cands[0] if cands else None
+            return []
+        return [os.path.join(perv, f)
+                for f in working_map_files(sorted(os.listdir(perv)))]
 
     @staticmethod
     def _np_to_qimage(arr) -> QImage:
@@ -1390,12 +1403,12 @@ class RepairPage(QWidget):
         """
         Подгрузить карту сразу при проверке пункта.
 
-        Путь к рабочей карте выводится из номера пункта («Первичка/NNNN.png»),
-        так что просить сотрудника нажимать «Загрузить карту» незачем. Если
-        карты нет — молча ничего не делаем: у пункта её может и не быть.
+        Пути к листам выводятся из содержимого «Первички», так что просить
+        сотрудника нажимать «Загрузить карту» незачем. Если карты нет — молча
+        ничего не делаем: у пункта её может и не быть.
         """
         folder = self._point_folder()
-        if not os.path.isdir(folder) or not self._find_map_path(folder):
+        if not os.path.isdir(folder) or not self._find_map_paths(folder):
             self.lbl_map_status.setText(
                 "Рабочая карта (Первичка/NNNN.png) в пункте не найдена")
             return
@@ -1406,55 +1419,148 @@ class RepairPage(QWidget):
         if not os.path.isdir(folder):
             self._log("Укажите папку пункта", "error")
             return
-        path = self._find_map_path(folder)
-        if not path:
+        пути = self._find_map_paths(folder)
+        if not пути:
             self._log("Рабочая карта (Первичка/NNNN.png) не найдена", "error")
             return
         import numpy as np
         from PIL import Image
-        self._map_path = path
-        self._map_orig = np.array(Image.open(path).convert("RGB"))
-        self._map_arr = self._map_orig.copy()
-        self._map_edits = []
-        self._map_pending = None
+        from repair.map_sheets import sheet_number
+
+        self._sheets = []
+        for p in пути:
+            self._sheets.append({
+                "path": p,
+                "num": sheet_number(p),
+                "arr": np.array(Image.open(p).convert("RGB")),
+                "labels": [],
+                "by_number": {},
+                "edits": [],       # [(номер, значение, рамка подписи)]
+            })
+        self._sheet_idx = 0
+        self._map_cycle = {}
+        self._map_shown = None
+        self._map_dirty = False
         self.list_map_edits.clear()
-        self.map_view._fitted = False
-        self.map_view.set_image(self._np_to_qimage(self._map_arr))
+        self._build_sheet_buttons()
+        self._show_sheet(0, fit=True)
         self.btn_map_undo.setEnabled(False)
         self.btn_map_save.setEnabled(False)
-        self.lbl_map_status.setText(
-            f"{os.path.basename(path)} · кликните по подписи заменённого сечения")
-        self._log(f"Карта загружена: {os.path.basename(path)}", "info")
-        self._map_cycle = {}
-        self.list_map_edits.clear()
+        листы = ", ".join(os.path.basename(s["path"]) for s in self._sheets)
+        self._log(f"Карта загружена: {листы}"
+                  + (f" ({len(self._sheets)} листа)" if len(self._sheets) > 1
+                     else ""), "info")
         self._map_scan_labels()
+
+    # ── листы карты ──────────────────────────────────────────────────
+
+    def _build_sheet_buttons(self):
+        """Ряд «Лист 1 / Лист 2 / …»; при одном листе ряд скрыт."""
+        for b in self._sheet_buttons:
+            self.row_sheets.removeWidget(b)
+            b.deleteLater()
+        self._sheet_buttons = []
+        if len(self._sheets) < 2:
+            self.wid_sheets.setVisible(False)
+            return
+        for i, s in enumerate(self._sheets):
+            b = QPushButton(f"Лист {s['num']}")
+            b.setObjectName("segment")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _=False, idx=i: self._show_sheet(idx))
+            self.row_sheets.addWidget(b)
+            self._sheet_buttons.append(b)
+        self.row_sheets.addStretch()
+        self.wid_sheets.setVisible(True)
+
+    def _sheet(self, idx: int | None = None) -> dict | None:
+        i = self._sheet_idx if idx is None else idx
+        return self._sheets[i] if 0 <= i < len(self._sheets) else None
+
+    def _show_sheet(self, idx: int, fit: bool = False):
+        """Показать лист карты на экране."""
+        s = self._sheet(idx)
+        if s is None:
+            return
+        self._sheet_idx = idx
+        for i, b in enumerate(self._sheet_buttons):
+            b.setChecked(i == idx)
+        if fit:
+            self.map_view._fitted = False
+        self.map_view.set_image(self._np_to_qimage(s["arr"]))
+        self._update_map_status()
+
+    def _update_map_status(self):
+        s = self._sheet()
+        if s is None:
+            return
+        сечений = len(s["by_number"])
+        хвост = (f"распознано сечений {сечений}" if сечений
+                 else "подписи ещё не разобраны")
+        лист = f"лист {s['num']} · " if len(self._sheets) > 1 else ""
+        self.lbl_map_status.setText(
+            f"{лист}{os.path.basename(s['path'])} · {хвост}")
 
     # ── подписи сечений на карте и план правок ───────────────────────
 
     def _map_scan_labels(self):
-        """Найти подписи сечений на загруженной карте (фоном)."""
-        if self._map_arr is None:
+        """Найти подписи сечений на всех листах карты (фоном)."""
+        if not self._sheets:
             return
         from workers.repair_worker import MapLabelsWorker
-        self._map_labels = []
-        self._map_by_number = {}
-        self.lbl_map_status.setText(
-            f"{os.path.basename(self._map_path or '')} · ищу подписи сечений…")
-        w = MapLabelsWorker(self._map_arr.copy(), parent=self)
+
+        for s in self._sheets:
+            s["labels"] = []
+            s["by_number"] = {}
+        self.seg_map.set_phases([f"Лист {s['num']}" for s in self._sheets])
+        self.seg_map.set_current(0)
+        self.lbl_map_status.setText("Ищу подписи сечений на карте…")
+        # Массивы отдаём без копий: find_labels только читает, а копия каждого
+        # листа — это лишние десятки мегабайт.
+        w = MapLabelsWorker([s["arr"] for s in self._sheets], parent=self)
         w.log.connect(lambda m: self._log(m, "info"))
         w.info.connect(self._log)
-        w.result.connect(self._on_map_labels)
+        w.sheet_done.connect(self._on_sheet_labels)
+        w.finished_ok.connect(lambda ok: self.seg_map.finish())
         self._workers["map_labels"] = w
         w.start()
 
-    def _on_map_labels(self, labels):
+    def _on_sheet_labels(self, idx: int, labels):
         from repair.map_labels import labels_by_number
-        self._map_labels = labels or []
-        self._map_by_number = labels_by_number(self._map_labels)
-        self.lbl_map_status.setText(
-            f"{os.path.basename(self._map_path or '')} · "
-            f"распознано сечений {len(self._map_by_number)}")
+        from repair.map_sheets import MIN_SECTION_LABELS
+
+        s = self._sheet(idx)
+        if s is None:
+            return
+        s["labels"] = labels or []
+        s["by_number"] = labels_by_number(s["labels"])
+        # Страховка от правки исходника ОТН: у него разметки толщинометрии нет,
+        # подписей находится 0–1, тогда как у рабочего листа — от 66.
+        if len(s["by_number"]) < MIN_SECTION_LABELS:
+            s["readonly"] = True
+            self._log(f"Лист {s['num']} ({os.path.basename(s['path'])}): "
+                      f"подписей сечений почти нет — похоже, это исходник ОТН, "
+                      f"править его не буду", "warn")
+        self.seg_map.set_current(idx + 1)
+        if idx == self._sheet_idx:
+            self._update_map_status()
         self._refresh_map_plan()
+
+    def _sheets_by_number(self) -> dict:
+        """{индекс листа: множество номеров сечений} — для подсказки по соседям."""
+        return {i: set(s["by_number"]) for i, s in enumerate(self._sheets)
+                if not s.get("readonly")}
+
+    def _places_for(self, номер: int) -> list[tuple[int, object]]:
+        """Все места сечения на карте: [(индекс листа, подпись), …]."""
+        места = []
+        for i, s in enumerate(self._sheets):
+            if s.get("readonly"):
+                continue
+            for l in s["by_number"].get(номер, []):
+                места.append((i, l))
+        return места
 
     def _planned_edits(self) -> list[tuple[int, str]]:
         """
@@ -1496,30 +1602,50 @@ class RepairPage(QWidget):
             self.btn_map_apply_unique.setEnabled(False)
             return
 
+        from repair.map_sheets import likely_sheet
+
+        много_листов = len(self._sheets) > 1
+        по_листам = self._sheets_by_number() if много_листов else {}
         однозначных = 0
         for номер, значение in план:
-            места = self._map_by_number.get(номер, [])
+            места = self._places_for(номер)
+            листы = sorted({i for i, _ in места})
             if len(места) == 1:
-                цвет, хвост = "done", "подпись найдена"
+                цвет = "done"
+                хвост = "подпись найдена"
+                if много_листов:
+                    хвост = f"лист {self._sheets[листы[0]]['num']} · " + хвост
                 однозначных += 1
             elif len(места) > 1:
-                цвет, хвост = "warn", f"мест на карте: {len(места)} — выберите"
+                цвет = "warn"
+                разбивка = ", ".join(
+                    f"лист {self._sheets[i]['num']} — "
+                    f"{sum(1 for j, _ in места if j == i)}" for i in листы)
+                хвост = f"мест: {len(места)} ({разбивка}) — выберите"
+                if len(листы) > 1:
+                    # Сечения нумеруются вдоль трубопровода: лист, где лежат
+                    # соседние номера, почти наверняка держит и это сечение.
+                    # Подсказываем, но не проставляем — решает сотрудник.
+                    вероятный = likely_sheet(номер, по_листам)
+                    if вероятный is not None:
+                        хвост += (f"; вероятно лист "
+                                  f"{self._sheets[вероятный]['num']} (по соседям)")
             else:
                 цвет, хвост = "wait", "подпись не найдена, правьте кликом"
             item = QListWidgetItem(f"сечение {номер} → {значение} · {хвост}")
             item.setIcon(dot_icon(_DOT[цвет]))
             item.setData(Qt.UserRole, (номер, значение))
             self.list_map_plan.addItem(item)
-        self.btn_map_apply_unique.setEnabled(однозначных > 0
-                                            and self._map_arr is not None)
+        self.btn_map_apply_unique.setEnabled(однозначных > 0 and
+                                             bool(self._sheets))
 
     def _map_plan_clicked(self, item):
         """Перейти к подписи сечения; при нескольких местах — к следующему."""
         данные = item.data(Qt.UserRole)
-        if not данные or self._map_arr is None:
+        if not данные or not self._sheets:
             return
         номер, значение = данные
-        места = self._map_by_number.get(номер, [])
+        места = self._places_for(номер)
         if not места:
             self._log(f"Сечение {номер}: подпись на карте не распознана — "
                       f"кликните по ней сами", "warn")
@@ -1528,12 +1654,16 @@ class RepairPage(QWidget):
         if i >= len(места):
             i = 0
         self._map_cycle[номер] = i
-        подпись = места[i]
+        лист, подпись = места[i]
+        if лист != self._sheet_idx:
+            self._show_sheet(лист)
         self.map_view.show_at(*подпись.point, box=подпись.bbox)
-        self._map_shown = (номер, значение, подпись)
+        self._map_shown = (номер, значение, лист, подпись)
         self.btn_map_apply_one.setEnabled(True)
         уточнение = f" (место {i + 1} из {len(места)})" if len(места) > 1 else ""
-        self._log(f"Сечение {номер}{уточнение}: подпись показана на карте",
+        где = (f", лист {self._sheets[лист]['num']}"
+               if len(self._sheets) > 1 else "")
+        self._log(f"Сечение {номер}{уточнение}{где}: подпись показана на карте",
                   "info")
 
     @staticmethod
@@ -1544,32 +1674,45 @@ class RepairPage(QWidget):
             text = f"({text})" if not text.endswith(")") else f"({text}"
         return text
 
-    def _map_write(self, номер: int, значение: str, подпись) -> bool:
-        """Записать новое значение в подпись сечения на карте."""
+    def _map_write(self, номер: int, значение: str, лист: int, подпись) -> bool:
+        """Записать новое значение в подпись сечения на указанном листе."""
         from repair.map_editor import render_value, render_value_in
+
+        s = self._sheet(лист)
+        if s is None or s.get("readonly"):
+            return False
         значение = self._map_value_text(значение)
+        arr = s["arr"]
+        # Кроп «до» снимаем с массива перед записью: держать копию каждого
+        # листа только ради него — это десятки лишних мегабайт.
+        было = arr.copy() if arr.size < 60_000_000 else None
         try:
             if подпись.value_bbox is not None:
                 # Рамка значения известна из распознанной подписи — берём её.
                 # Выращивать рамку от точки нельзя: рядом с подписью стоит
                 # красный крестик замера, и рамка «раздувается» на него.
-                rep = render_value_in(self._map_arr, подпись.value_bbox,
+                rep = render_value_in(arr, подпись.value_bbox,
                                       значение, label=подпись.bbox)
             else:
-                rep = render_value(self._map_arr, подпись.point, значение)
+                rep = render_value(arr, подпись.point, значение)
         except Exception as e:
             self._log(f"Сечение {номер}: правка не удалась — {e}", "error")
             return False
-        self._map_edits.append((подпись.point, None,
-                                f"сечение {номер} → {значение}"))
-        item = QListWidgetItem(f"сечение {номер} → {значение}")
+
+        s["edits"].append((номер, значение, подпись))
+        self._map_dirty = True
+        где = f" · лист {s['num']}" if len(self._sheets) > 1 else ""
+        item = QListWidgetItem(f"сечение {номер} → {значение}{где}")
         item.setIcon(dot_icon(_DOT["done"]))
+        item.setData(Qt.UserRole, лист)
         self.list_map_edits.addItem(item)
-        self.lbl_map_before.setPixmap(
-            self._crop_pixmap(self._map_orig, rep["label"]))
-        self.lbl_map_after.setPixmap(
-            self._crop_pixmap(self._map_arr, rep["label"]))
-        self.map_view.set_image(self._np_to_qimage(self._map_arr))
+        if было is not None:
+            self.lbl_map_before.setPixmap(self._crop_pixmap(было, rep["label"]))
+        self.lbl_map_after.setPixmap(self._crop_pixmap(arr, rep["label"]))
+        if лист != self._sheet_idx:
+            self._show_sheet(лист)
+        else:
+            self.map_view.set_image(self._np_to_qimage(arr))
         self.map_view.show_at(*подпись.point, box=rep["label"])
         self.btn_map_undo.setEnabled(True)
         self.btn_map_save.setEnabled(True)
@@ -1578,26 +1721,36 @@ class RepairPage(QWidget):
     def _map_apply_shown(self):
         if not self._map_shown:
             return
-        номер, значение, подпись = self._map_shown
-        if self._map_write(номер, значение, подпись):
+        номер, значение, лист, подпись = self._map_shown
+        if self._map_write(номер, значение, лист, подпись):
             self._log(f"Сечение {номер}: на карте записано {значение}", "done")
 
     def _map_apply_unique(self):
         """
         Проставить значения там, где подпись сечения на карте одна.
 
-        Места с несколькими одинаковыми сечениями намеренно не трогаются:
-        какое из них заменено, видно только по схеме — решает сотрудник.
+        Проход идёт сразу по всем листам: замена одного акта нередко попадает
+        на два листа, и заставлять открывать каждый и жать кнопку заново
+        незачем. Места с несколькими одинаковыми сечениями намеренно не
+        трогаются: какое из них заменено, видно только по схеме — решает
+        сотрудник.
         """
-        сделано = отложено = 0
+        сделано, отложено = 0, 0
+        по_листам: dict[int, int] = {}
         for номер, значение in self._planned_edits():
-            места = self._map_by_number.get(номер, [])
+            места = self._places_for(номер)
             if len(места) != 1:
                 отложено += 1
                 continue
-            if self._map_write(номер, значение, места[0]):
+            лист, подпись = места[0]
+            if self._map_write(номер, значение, лист, подпись):
                 сделано += 1
+                по_листам[лист] = по_листам.get(лист, 0) + 1
+        разбивка = ", ".join(
+            f"лист {self._sheets[i]['num']} — {n}"
+            for i, n in sorted(по_листам.items())) if len(self._sheets) > 1 else ""
         self._log(f"Карта: проставлено {сделано}"
+                  + (f" ({разбивка})" if разбивка else "")
                   + (f", отложено {отложено} (несколько мест или подпись "
                      f"не найдена)" if отложено else ""),
                   "done" if сделано else "warn")
@@ -1614,17 +1767,19 @@ class RepairPage(QWidget):
         """Клик по подписи → ввод нового значения (шрифт Arial и цвет
         берутся из самой подписи, поэтому оранжевые сечения остаются
         оранжевыми)."""
-        if self._map_arr is None:
+        s = self._sheet()
+        if s is None or s.get("readonly"):
             return
         from PySide6.QtWidgets import QInputDialog
         from repair.map_editor import label_bbox_at, find_value_span
 
+        arr = s["arr"]
         xy = (int(x), int(y))
         current = ""
         try:
-            lb = label_bbox_at(self._map_arr, *xy)
-            if lb is not None and find_value_span(self._map_arr, lb) is not None:
-                self.lbl_map_before.setPixmap(self._crop_pixmap(self._map_arr, lb))
+            lb = label_bbox_at(arr, *xy)
+            if lb is not None and find_value_span(arr, lb) is not None:
+                self.lbl_map_before.setPixmap(self._crop_pixmap(arr, lb))
         except Exception:
             pass
 
@@ -1642,65 +1797,116 @@ class RepairPage(QWidget):
         self._map_apply_text(xy, text)
 
     def _map_apply_text(self, label_xy, text):
+        """Ручная правка по клику: подпись ищется на показанном листе."""
         from repair.map_editor import render_value
-        before = self._map_arr.copy()
+
+        s = self._sheet()
+        if s is None:
+            return
+        arr = s["arr"]
+        before = arr.copy()
         try:
-            rep = render_value(self._map_arr, label_xy, text)
+            rep = render_value(arr, label_xy, text)
         except ValueError as e:
-            self._map_arr = before
+            s["arr"] = before
             self._log(f"Карта: {e}", "error")
             self.lbl_map_status.setText(f"Не получилось: {e}. "
                                         f"Кликните по подписи сечения")
             return
         lb = rep["label"]
-        self._map_edits.append((label_xy, text))
-        self.lbl_map_before.setPixmap(self._crop_pixmap(self._map_orig, lb))
-        self.lbl_map_after.setPixmap(self._crop_pixmap(self._map_arr, lb))
+        s["edits"].append((None, text, label_xy))
+        self._map_dirty = True
+        self.lbl_map_before.setPixmap(self._crop_pixmap(before, lb))
+        self.lbl_map_after.setPixmap(self._crop_pixmap(arr, lb))
+        где = f" · лист {s['num']}" if len(self._sheets) > 1 else ""
         item = QListWidgetItem(
-            f"правка {len(self._map_edits)}: {rep['text']} · Arial {rep['font_size']} · "
-            f"цвет RGB{rep['color']}")
+            f"{rep['text']} · Arial {rep['font_size']} · "
+            f"цвет RGB{rep['color']}{где}")
         item.setIcon(dot_icon(_DOT["done"]))
+        item.setData(Qt.UserRole, self._sheet_idx)
         self.list_map_edits.addItem(item)
-        self.map_view.set_image(self._np_to_qimage(self._map_arr))
+        self.map_view.set_image(self._np_to_qimage(arr))
         self.btn_map_undo.setEnabled(True)
         self.btn_map_save.setEnabled(True)
         self.lbl_map_status.setText(
-            f"Правок: {len(self._map_edits)}. Проверьте «до/после» и "
-            f"кликните по следующей подписи или сохраните карту")
+            f"Правок: {self._total_edits()}. Проверьте «до/после» и кликните "
+            f"по следующей подписи или сохраните карту")
+
+    def _total_edits(self) -> int:
+        return sum(len(s["edits"]) for s in self._sheets)
 
     def _map_undo(self):
-        if not self._map_edits:
+        """
+        Отменить последнюю правку — на том листе, где она была сделана.
+
+        Лист перечитывается с диска и правки повторяются: держать копию
+        исходного массива каждого листа только ради отката слишком дорого,
+        а сама операция редкая.
+        """
+        item = self.list_map_edits.item(self.list_map_edits.count() - 1)
+        if item is None:
             return
-        from repair.map_editor import render_value
-        self._map_edits.pop()
+        лист = item.data(Qt.UserRole) or 0
+        s = self._sheet(лист)
+        if s is None or not s["edits"]:
+            return
+        import numpy as np
+        from PIL import Image
+        from repair.map_editor import render_value, render_value_in
+
+        s["edits"].pop()
         self.list_map_edits.takeItem(self.list_map_edits.count() - 1)
-        self._map_arr = self._map_orig.copy()
-        for label_xy, text in self._map_edits:
+        s["arr"] = np.array(Image.open(s["path"]).convert("RGB"))
+        for номер, значение, привязка in s["edits"]:
             try:
-                render_value(self._map_arr, label_xy, text)
-            except ValueError:
+                if номер is None:
+                    render_value(s["arr"], привязка, значение)
+                elif привязка.value_bbox is not None:
+                    render_value_in(s["arr"], привязка.value_bbox, значение,
+                                    label=привязка.bbox)
+                else:
+                    render_value(s["arr"], привязка.point, значение)
+            except Exception:
                 pass
-        self.map_view.set_image(self._np_to_qimage(self._map_arr))
-        self.btn_map_undo.setEnabled(bool(self._map_edits))
-        self.btn_map_save.setEnabled(bool(self._map_edits))
+        if лист == self._sheet_idx:
+            self.map_view.set_image(self._np_to_qimage(s["arr"]))
+        else:
+            self._show_sheet(лист)
+        есть = self._total_edits() > 0
+        self._map_dirty = есть
+        self.btn_map_undo.setEnabled(есть)
+        self.btn_map_save.setEnabled(есть)
         self._log("Последняя правка карты отменена", "info")
 
     def _map_save(self):
-        if self._map_arr is None or not self._map_path:
+        """
+        Сохранить все изменённые листы: один бэкап, одна запись в журнале.
+
+        Замена одного акта нередко ложится на два листа, и разносить это на
+        два сохранения значило бы плодить бэкапы одного и того же события.
+        """
+        изменённые = [s for s in self._sheets if s["edits"]]
+        if not изменённые:
             return
         from PIL import Image
         from repair.safety import make_backup, append_journal
+
         folder = self._point_folder()
-        b = make_backup(folder, [self._map_path])
-        Image.fromarray(self._map_arr).save(self._map_path)
+        b = make_backup(folder, [s["path"] for s in изменённые])
+        строки = []
+        for s in изменённые:
+            Image.fromarray(s["arr"]).save(s["path"])
+            строки.append(f"лист {s['num']} ({os.path.basename(s['path'])}): "
+                          f"правок {len(s['edits'])}")
+        всего = self._total_edits()
         append_journal(folder, "Правка коррозионной карты",
-                       [f"файл: {os.path.basename(self._map_path)}",
-                        f"правок: {len(self._map_edits)}",
-                        f"бэкап: {b}"])
-        self._log(f"Карта сохранена ({len(self._map_edits)} правок), "
+                       строки + [f"бэкап: {b}"])
+        листов = f" на {len(изменённые)} листах" if len(изменённые) > 1 else ""
+        self._log(f"Карта сохранена ({всего} правок{листов}), "
                   f"бэкап и журнал созданы", "done")
-        self._map_orig = self._map_arr.copy()
-        self._map_edits = []
+        for s in изменённые:
+            s["edits"] = []
+        self._map_dirty = False
         self.list_map_edits.clear()
         self.btn_map_undo.setEnabled(False)
         self.btn_map_save.setEnabled(False)

@@ -17,6 +17,8 @@ from repair.map_labels import (MapLabel, find_labels, labels_by_number,
 from repair.map_editor import BBox
 
 _CANDIDATES = [
+    r"C:\Users\volod\Desktop\Сданы на ПНОС — копия"
+    r"\п.2763 (Всем отправлено)\Первичка\2763.png",
     r"C:\Users\volod\Desktop\Готовые — копия\п.2763(ШАР)\Первичка\2763.png",
     r"C:\Users\volod\Desktop\Готовые\п.2763(ШАР)\Первичка\2763.png",
 ]

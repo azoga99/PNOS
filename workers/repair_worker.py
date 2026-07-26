@@ -472,33 +472,41 @@ class MapLabelsWorker(QThread):
     """
     Поиск подписей сечений на коррозионной карте (фоном).
 
-    Распознавание карты целиком занимает несколько секунд, поэтому выполняется
-    в потоке: интерфейс не должен подвисать после загрузки карты.
+    Карта бывает из нескольких листов (у п.2704 и п.2783 — два, у п.2808 —
+    три), поэтому воркер обходит их подряд и отдаёт результат по каждому листу
+    сразу, как только тот разобран: лист занимает около четырёх секунд, и ждать
+    всю карту, чтобы начать работу с первым листом, незачем.
     """
 
     log = Signal(str)
     info = Signal(str, str)
     finished_ok = Signal(bool)
-    result = Signal(object)          # list[MapLabel]
+    sheet_done = Signal(int, object)   # индекс листа, list[MapLabel]
 
-    def __init__(self, arr, parent=None):
+    def __init__(self, arrays, parent=None):
         super().__init__(parent)
-        self._arr = arr
+        self._arrays = list(arrays)
 
     def run(self):
         try:
             from repair.map_labels import find_labels
 
-            подписи = find_labels(self._arr, log=self.log.emit)
-            self.result.emit(подписи)
-            if подписи:
+            всего = len(self._arrays)
+            for i, arr in enumerate(self._arrays):
+                подпись_листа = f"лист {i + 1}/{всего}: " if всего > 1 else ""
+                подписи = find_labels(
+                    arr, log=lambda m, p=подпись_листа: self.log.emit(p + m))
+                self.sheet_done.emit(i, подписи)
                 номера = sorted({l.number for l in подписи})
-                self.info.emit(
-                    f"На карте распознано сечений: {len(номера)} "
-                    f"(от {номера[0]} до {номера[-1]})", "done")
-            else:
-                self.info.emit("Подписи сечений на карте распознать не удалось "
-                               "— правьте кликом по подписи", "warn")
+                где = f" (лист {i + 1})" if всего > 1 else ""
+                if номера:
+                    self.info.emit(
+                        f"Распознано сечений{где}: {len(номера)} "
+                        f"(от {номера[0]} до {номера[-1]})", "done")
+                else:
+                    self.info.emit(
+                        f"Подписи сечений{где} распознать не удалось — "
+                        f"правьте кликом по подписи", "warn")
             self.finished_ok.emit(True)
         except Exception as e:
             import traceback
