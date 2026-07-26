@@ -471,9 +471,10 @@ class RepairPage(QWidget):
         row3.addWidget(self.btn_checklist)
         row3.addStretch()
         v3.addLayout(row3)
-        self.tabs.addTab(tab_prev, "Предпросмотр")
+        # Вкладку регистрируем после карты: предпросмотр с кнопкой записи —
+        # последний шаг, и порядок вкладок должен совпадать с порядком работы.
 
-        # Вкладка 4: карта
+        # Вкладка 3: карта
         tab_map = QWidget()
         v4 = QHBoxLayout(tab_map)
         v4.setSpacing(8)
@@ -587,6 +588,7 @@ class RepairPage(QWidget):
         side.addWidget(self.btn_map_save)
         v4.addLayout(side)
         self.tabs.addTab(tab_map, "Карта")
+        self.tabs.addTab(tab_prev, "Предпросмотр")
 
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
@@ -628,12 +630,20 @@ class RepairPage(QWidget):
 
     # ═════════════════════════════ Сканирование ════════════════════════
 
-    def _start_scan(self):
+    def _start_scan(self, run_ocr: bool = True):
+        """
+        Перечитать пункт с диска.
+
+        `run_ocr=False` — обновление после записи или отката: документы с тех
+        пор не менялись, и гонять по ним распознавание заново (это минуты на
+        комплект ИД) незачем.
+        """
         folder = self._point_folder()
         if not os.path.isdir(folder):
             self._log("Укажите существующую папку пункта", "error")
             return
         from workers.repair_worker import RepairScanWorker
+        self._scan_with_ocr = run_ocr
         self.btn_scan.setEnabled(False)
         w = RepairScanWorker(folder, parent=self)
         w.log.connect(lambda m: self._log(m, "info"))
@@ -688,7 +698,8 @@ class RepairPage(QWidget):
         # единого нажатия, а в конце появляется кроп с датой.
         if self.list_docs.count():
             self.list_docs.setCurrentRow(0)
-        self._start_ocr_queue()
+        if getattr(self, "_scan_with_ocr", True):
+            self._start_ocr_queue()
 
     # ═════════════════════════ Превью документа ════════════════════════
 
@@ -1218,8 +1229,14 @@ class RepairPage(QWidget):
         records = self._registry_records()
         собранная = build_svedenia(records)
         now = self._scan.get("svedenia_now")
+        # На ручном контроле (этап 3) отчёта ещё нет — его создаёт этап 5.
+        # Это норма, а не ошибка: строка «Сведения о ремонте» вносится позже.
+        есть_отчёт = bool(self._scan.get("report"))
         self._sved_generated = собранная
-        self.txt_sved_now.setPlainText(now or "(строка в отчёте не найдена)")
+        self.txt_sved_now.setPlainText(
+            now if now else ("(отчёт ещё не создан — появится на этапе 5)"
+                             if not есть_отчёт else
+                             "(строка в отчёте не найдена)"))
         # Правку сотрудника не затираем: пересборка предпросмотра случается на
         # каждом переключении вкладки.
         if self._sved_edited:
@@ -1244,11 +1261,17 @@ class RepairPage(QWidget):
         # строка 0 — Word
         chk = QTableWidgetItem()
         chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-        chk.setCheckState(Qt.Checked)
+        chk.setCheckState(Qt.Checked if есть_отчёт else Qt.Unchecked)
         self.tbl_preview.setItem(0, 0, chk)
         self.tbl_preview.setItem(0, 1, QTableWidgetItem("Word · таблица 1"))
-        self.tbl_preview.setItem(0, 2, QTableWidgetItem(now or "(не найдена)"))
-        self.tbl_preview.setItem(0, 3, QTableWidgetItem(svedenia))
+        self.tbl_preview.setItem(
+            0, 2, QTableWidgetItem(now if now else
+                                   ("(не найдена)" if есть_отчёт
+                                    else "(отчёта ещё нет)")))
+        self.tbl_preview.setItem(
+            0, 3, QTableWidgetItem(svedenia if есть_отчёт else
+                                   f"{svedenia}\n\n(будет внесено, когда "
+                                   f"отчёт создан на этапе 5)"))
 
         for i, ch in enumerate(changes, start=1):
             chk = QTableWidgetItem()
@@ -1275,24 +1298,57 @@ class RepairPage(QWidget):
         self.btn_apply.setEnabled(has_any)
         self.btn_checklist.setEnabled(has_any)
         # «Не записано» показываем не по факту наличия строк, а по расхождению
-        # с файлами: после записи отчёт уже содержит нужную строку, и плашка
-        # честно гаснет.
-        строка_разошлась = bool(svedenia) and svedenia != " ".join((now or "").split())
-        self._set_apply_state(len(changes), bool(changes) or строка_разошлась)
+        # с файлами: после записи книга и отчёт уже содержат нужное, и плашка
+        # честно гаснет. Пока отчёта нет, строку сравнивать не с чем — иначе
+        # плашка горела бы всегда и о записи в Excel ничего не говорила.
+        строка_разошлась = (есть_отчёт and bool(svedenia)
+                            and svedenia != " ".join((now or "").split()))
+        реестр_не_заведён = bool(records) and not self._scan.get("registry_existed")
+        self._set_apply_state(len(changes),
+                              bool(changes) or строка_разошлась
+                              or реестр_не_заведён,
+                              есть_отчёт)
 
-    def _set_apply_state(self, n_changes: int, надо_писать: bool):
+    def _map_state_text(self) -> str:
+        """
+        Строка о состоянии карты для плашки предпросмотра.
+
+        Карта живёт отдельно: её сохраняет своя кнопка, и «Применить выбранное»
+        её не трогает. Порядок нажатий значения не имеет, но человеку об этом
+        должно быть сказано — иначе непонятно, не потерялись ли правки карты.
+        """
+        if not self._sheets:
+            return ""
+        не_сохранено = self._total_edits()
+        if не_сохранено:
+            return (f" Карта: {не_сохранено} правок не сохранено — вернитесь на "
+                    f"вкладку «Карта» и нажмите «Сохранить карту».")
+        план = len(self._planned_edits())
+        if план:
+            return (f" Карта сохраняется отдельно своей кнопкой; отмеченных "
+                    f"сечений: {план}.")
+        return ""
+
+    def _set_apply_state(self, n_changes: int, надо_писать: bool,
+                         есть_отчёт: bool = True):
         """Плашка «записано / ещё не записано» под таблицей предпросмотра."""
         lbl = self.lbl_apply_state
         записано = (self._applied_summary
                     if self._applied_folder == self._point_folder() else "")
+        if записано:
+            записано += self._map_state_text()
         if надо_писать:
-            хвост = (f"сечений к правке: {n_changes}"
-                     if n_changes else "строка отчёта")
+            части = []
+            if n_changes:
+                части.append(f"сечений к правке: {n_changes}")
+            if not есть_отчёт:
+                части.append("строка отчёта — после этапа 5")
+            хвост = f" ({'; '.join(части)})" if части else ""
             lbl.setText(
-                f"Изменения ещё не записаны в файлы пункта ({хвост}). "
-                f"Нажмите «Применить выбранное» — до этого листы «Импорт», "
-                f"лист «Ремонт» и отчёт остаются прежними, и следующие этапы "
-                f"соберут отчёт по старым замерам.")
+                f"Изменения ещё не записаны в файлы пункта{хвост}. "
+                f"Нажмите «Применить выбранное» — до этого листы «Импорт» и "
+                f"лист «Ремонт» остаются прежними, и следующие этапы соберут "
+                f"отчёт по старым замерам.")
             lbl.setProperty("state", "wait")
         elif записано:
             lbl.setText(записано)
@@ -1393,12 +1449,20 @@ class RepairPage(QWidget):
         self.btn_apply.setEnabled(True)
         if ok:
             self._applied_folder = self._point_folder()
+            куда = ["листы «Импорт» и «Импорт (ПР)»", "лист «Ремонт»"]
+            хвост = ""
+            if self._scan.get("report"):
+                куда.append("строка «Сведения о ремонте» в отчёте")
+            else:
+                # Отчёт создаёт этап 5 — обещать записанную строку нельзя.
+                хвост = (" Строка «Сведения о ремонте» будет внесена, когда "
+                         "отчёт создан на этапе 5 — вернитесь сюда и нажмите "
+                         "«Применить выбранное» ещё раз.")
             self._applied_summary = (
-                "Записано в файлы пункта: листы «Импорт» и «Импорт (ПР)», лист "
-                "«Ремонт», строка «Сведения о ремонте» в отчёте. Бэкап и "
-                "журнал созданы.")
-            self._log("Готово. Повторное сканирование пункта...", "done")
-            self._start_scan()
+                f"Записано в файлы пункта: {', '.join(куда)}. Бэкап и журнал "
+                f"созданы.{хвост}")
+            self._log("Готово. Перечитываю пункт...", "done")
+            self._start_scan(run_ocr=False)
 
     def _verify(self):
         folder = self._point_folder()
@@ -1436,7 +1500,7 @@ class RepairPage(QWidget):
                         f"бэкап: {b}"])
         self._log(f"Откат из {os.path.basename(b)}: восстановлено "
                   f"{len(restored)} файла(ов)", "done")
-        self._start_scan()
+        self._start_scan(run_ocr=False)
 
     # ═════════════════════════════ Карта ══════════════════════════════
 

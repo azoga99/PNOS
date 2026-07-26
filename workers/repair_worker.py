@@ -39,13 +39,28 @@ def find_point_report(point_folder: str) -> str | None:
     return sorted(non_print or cands)[0]
 
 
+#: Рабочие книги, которые в папке пункта книгой пункта НЕ являются.
+#: CleanSource.xlsx создаёт этап 5 из листа «Экспорт» — она попадала первой по
+#: алфавиту (латиница раньше кириллицы), и модуль читал сечения из неё.
+_NOT_POINT_WORKBOOKS = ("cleansource",)
+
+
 def find_point_xlsm(point_folder: str) -> str | None:
+    """Книга пункта: ПНОС_ТТП.xlsm, а не служебные файлы этапов."""
+    кандидаты = []
     for f in sorted(os.listdir(point_folder)):
         p = os.path.join(point_folder, f)
-        if os.path.isfile(p) and f.lower().endswith((".xlsm", ".xlsx", ".xls")) \
-                and not f.startswith("~$"):
-            return p
-    return None
+        low = f.lower()
+        if not (os.path.isfile(p) and low.endswith((".xlsm", ".xlsx", ".xls"))):
+            continue
+        if f.startswith("~$") or any(s in low for s in _NOT_POINT_WORKBOOKS):
+            continue
+        кандидаты.append(p)
+    if not кандидаты:
+        return None
+    # Книга пункта — .xlsm с макросами; прочее берём только если её нет.
+    xlsm = [p for p in кандидаты if p.lower().endswith(".xlsm")]
+    return (xlsm or кандидаты)[0]
 
 
 class RepairScanWorker(QThread):
