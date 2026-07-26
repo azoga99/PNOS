@@ -276,6 +276,15 @@ class RepairOcrWorker(QThread):
                                      self._reg_act_date)
             if self._date_done:
                 info.date_done = self._date_done
+            if короткий and not self._pending_hint and not info.act_date:
+                # У пункта без комплекта ИД блока подписей нет, а дату акта в
+                # грифе УТВЕРЖДАЮ пишут от руки — OCR её не берёт. Показываем
+                # гриф, чтобы кроп для сотрудника был всегда.
+                self._pending_hint = {
+                    "page": 1, "полоса": list(self.ZONE_GRIF),
+                    "поворот": self._rotations.get(1, 0),
+                    "зачем": "дата акта", "найдено": None,
+                }
             self.result.emit(info)
             self.phase.emit(len(self._phases), "")
             # Кроп — последним: реестр уже заполнен, и страница может сразу

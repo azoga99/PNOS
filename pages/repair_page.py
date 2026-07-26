@@ -150,7 +150,14 @@ class RepairPage(QWidget):
         self._doc_page_idx = 0
         self._doc_pages = 0
         self._id_map = None            # карта разделов комплекта ИД
-        self._ocr_done: set[str] = set()   # документы, уже распознанные
+        # Очередь распознавания: все документы ремонта пункта подряд, без
+        # единого нажатия. Кроп даты показывается в конце всей очереди —
+        # его даёт только комплект ИД, а он в списке обычно не первый.
+        self._ocr_queue: list[str] = []
+        self._ocr_idx = 0
+        self._ocr_phase_offset = 0     # сколько сегментов полосы уже пройдено
+        self._ocr_phase_sizes: list[int] = []
+        self._ocr_hints: list[tuple[str, dict]] = []
         self._ocr_running = False
         # служебные флаги таблицы сечений и состояния записи
         self._filling_sections = False
@@ -268,17 +275,6 @@ class RepairPage(QWidget):
         btn_open.setCursor(Qt.PointingHandCursor)
         btn_open.clicked.connect(self._doc_open_external)
         nav.addWidget(btn_open)
-        self.btn_ocr = QPushButton("Распознать заново")
-        self.btn_ocr.setObjectName("segment")
-        self.btn_ocr.setCursor(Qt.PointingHandCursor)
-        self.btn_ocr.setToolTip(
-            "Документ распознаётся сам, как только вы его открыли — кнопка "
-            "нужна лишь для повторного прохода. Из распознанного берутся "
-            "номера и даты актов, материал, типоразмеры; заполняются только "
-            "пустые ячейки реестра. Рукописные даты (день в грифе) OCR не "
-            "читает — их вписывайте по превью.")
-        self.btn_ocr.clicked.connect(lambda: self._doc_ocr(force=True))
-        nav.addWidget(self.btn_ocr)
         prev_col.addLayout(nav)
         # Полоса этапов распознавания — под превью, где и появится кроп даты.
         self.seg_ocr = SegmentBar()
@@ -688,10 +684,11 @@ class RepairPage(QWidget):
         self._fill_sections(res.get("sections", []))
         self._refresh_preview()
         self._map_autoload()
-        # Первый документ открывается и распознаётся сам — реестр заполняется
-        # без единого нажатия.
+        # Документы распознаются сами, все подряд: реестр заполняется без
+        # единого нажатия, а в конце появляется кроп с датой.
         if self.list_docs.count():
             self.list_docs.setCurrentRow(0)
+        self._start_ocr_queue()
 
     # ═════════════════════════ Превью документа ════════════════════════
 
@@ -709,9 +706,8 @@ class RepairPage(QWidget):
             self._doc_show()
         except Exception as e:
             self._log(f"Превью не открылось: {e}", "error")
-            return
-        # Распознавание запускается само: отдельная кнопка была лишним шагом.
-        self._doc_ocr()
+        # Распознавание здесь не запускаем: очередь по всем документам уже
+        # идёт (или прошла) — клик по списку только листает превью.
 
     def _doc_page(self, delta: int):
         if not self._doc_path:
@@ -736,51 +732,113 @@ class RepairPage(QWidget):
         if self._doc_path and os.path.isfile(self._doc_path):
             os.startfile(self._doc_path)
 
-    def _doc_ocr(self, force: bool = False):
-        """
-        Распознать открытый документ.
+    # ═══════════════════ Распознавание: очередь документов ═════════════
 
-        Запускается сама при открытии документа: отдельное нажатие кнопки было
-        лишним шагом — распознавание нужно всегда. Повторно один и тот же файл
-        не читается (комплект ИД — это десятки секунд), кнопка «Распознать
-        заново» снимает это ограничение.
+    def _start_ocr_queue(self):
         """
-        if not self._doc_path:
-            self._log("Сначала выберите документ в списке", "warn")
-            return
-        if self._ocr_running:
-            if force:
-                self._log("Распознавание уже идёт — дождитесь окончания", "wait")
-            return
-        if not force and self._doc_path in self._ocr_done:
-            return
+        Распознать все документы ремонта пункта подряд, без нажатий.
 
+        Раньше запускался только открытый документ, а первым в списке лежит акт
+        отбраковки — короткий, и кропа даты он не даёт: кроп рождается в блоке
+        подписей комплекта ИД, который стоит вторым. Поэтому очередь идёт по
+        всем документам, а кроп показывается в конце всей очереди.
+        """
+        from repair.pdf_preview import page_count
         from workers.repair_worker import RepairOcrWorker
+
+        if self._ocr_running:
+            return
+        docs = self._scan.get("docs")
+        файлы = list(getattr(docs, "all_files", []) or [])
+        if not файлы:
+            return
+
+        очередь, размеры, этапы = [], [], []
+        for p in файлы:
+            try:
+                страниц = page_count(p)
+            except Exception as e:
+                # Битые PDF встречаются (п.2704, файл 222-1-406): очередь из-за
+                # одного такого останавливаться не должна.
+                self._log(f"{os.path.basename(p)}: файл не читается ({e}) — "
+                          f"пропускаю", "warn")
+                continue
+            набор = (RepairOcrWorker.PHASES_ACT
+                     if страниц <= RepairOcrWorker.SHORT_DOC
+                     else RepairOcrWorker.PHASES_ID)
+            очередь.append(p)
+            размеры.append(len(набор))
+            этапы += list(набор)
+
+        if not очередь:
+            self._log("Ни один документ ремонта не удалось открыть", "error")
+            return
+
+        self._ocr_queue = очередь
+        self._ocr_phase_sizes = размеры
+        self._ocr_idx = 0
+        self._ocr_phase_offset = 0
+        self._ocr_hints = []
+        self.seg_ocr.set_phases(этапы)
+        self._log(f"Распознавание: документов в очереди {len(очередь)}", "info")
+        self._ocr_next()
+
+    def _ocr_next(self):
+        """Запустить распознавание очередного документа очереди."""
+        if self._ocr_idx >= len(self._ocr_queue):
+            self._finish_ocr_queue()
+            return
+        from workers.repair_worker import RepairOcrWorker
+
+        path = self._ocr_queue[self._ocr_idx]
         self._ocr_running = True
-        self._ocr_done.add(self._doc_path)
-        self.btn_ocr.setEnabled(False)
-        w = RepairOcrWorker(self._doc_path, parent=self)
+        w = RepairOcrWorker(path, parent=self)
         w.log.connect(lambda m: self._log(m, "info"))
         w.info.connect(self._log)
         w.result.connect(self._on_ocr)
         w.map_ready.connect(self._on_id_map)
-        w.zone_hint.connect(self._on_zone_hint)
-        w.phases.connect(self.seg_ocr.set_phases)
-        w.phase.connect(self.seg_ocr.set_current)
-        w.finished_ok.connect(self._on_ocr_finished)
+        w.zone_hint.connect(lambda h, p=path: self._collect_hint(p, h))
+        w.phase.connect(self._on_ocr_phase)
+        w.finished_ok.connect(self._on_doc_ocr_finished)
         self._workers["ocr"] = w
         w.start()
 
-    def _on_ocr_finished(self, ok: bool):
+    def _on_ocr_phase(self, index: int, name: str):
+        """Этап текущего документа → сегмент общей полосы."""
+        всего = len(self._ocr_queue)
+        подпись = name
+        if всего > 1 and name:
+            подпись = f"Документ {self._ocr_idx + 1} из {всего} · {name}"
+        self.seg_ocr.set_current(self._ocr_phase_offset + index, подпись)
+
+    def _on_doc_ocr_finished(self, ok: bool):
         self._ocr_running = False
-        self.btn_ocr.setEnabled(True)
-        if ok:
-            self.seg_ocr.finish()
-        else:
-            self.seg_ocr.reset()
-            if self._doc_path:
-                # Не получилось — пусть следующее открытие попробует снова.
-                self._ocr_done.discard(self._doc_path)
+        if self._ocr_idx < len(self._ocr_phase_sizes):
+            self._ocr_phase_offset += self._ocr_phase_sizes[self._ocr_idx]
+        self._ocr_idx += 1
+        self._ocr_next()
+
+    def _collect_hint(self, path: str, hint):
+        """Отложить кроп до конца очереди: сначала все документы, потом дата."""
+        if hint:
+            self._ocr_hints.append((path, hint))
+
+    def _finish_ocr_queue(self):
+        """
+        Очередь пройдена: показать кроп с датой и поставить курсор в ячейку.
+
+        Приоритет у «даты выполнения работ» из комплекта ИД: это то, что
+        сотрудник вписывает руками. Если её нет (у пункта только акт), покажем
+        гриф УТВЕРЖДАЮ — чтобы кроп в конце был всегда.
+        """
+        self.seg_ocr.finish()
+        self._ocr_running = False
+        if not self._ocr_hints:
+            return
+        путь, hint = next(
+            ((p, h) for p, h in self._ocr_hints
+             if h.get("зачем") == "дата выполнения работ"), self._ocr_hints[0])
+        self._show_zone(путь, hint)
 
     def _on_id_map(self, page_map):
         """Карта разделов комплекта ИД: показываем, где что лежит."""
@@ -804,30 +862,39 @@ class RepairPage(QWidget):
         if части:
             self._log("В комплекте: " + "; ".join(части), "info")
 
-    def _on_zone_hint(self, hint):
+    def _show_zone(self, path: str, hint):
         """
         Показать сотруднику фрагмент, который OCR прочитать не может.
 
         Рукописные даты и штампы Windows OCR не распознаёт вовсе, поэтому
         программа открывает нужный кроп сама — иначе пришлось бы листать
-        комплект на сотню страниц.
+        комплект на сотню страниц. Путь передаётся явно: кроп показывается в
+        конце очереди, когда открытым в превью может быть уже другой документ.
         """
-        if not hint or not self._doc_path:
+        if not hint or not path or not os.path.isfile(path):
             return
         try:
             from repair.pdf_preview import render_zone
             полоса = hint.get("полоса") or [0.6, 1.0]
-            arr = render_zone(self._doc_path, hint["page"] - 1,
-                              полоса[0], полоса[1],
+            arr = render_zone(path, hint["page"] - 1, полоса[0], полоса[1],
                               rotation=hint.get("поворот", 0), scale=2.8)
+            self._doc_path = path
+            self._doc_page_idx = hint["page"] - 1
             self.doc_view._fitted = False
             self.doc_view.set_image(self._np_to_qimage(arr))
-            self._doc_page_idx = hint["page"] - 1
             подпись = hint.get("зачем", "фрагмент")
             self.lbl_pg.setText(f"стр. {hint['page']} · {подпись}")
+            # Выделить документ в списке, чтобы было видно, откуда фрагмент.
+            for i in range(self.list_docs.count()):
+                if self.list_docs.item(i).toolTip() == path:
+                    self.list_docs.blockSignals(True)
+                    self.list_docs.setCurrentRow(i)
+                    self.list_docs.blockSignals(False)
+                    break
             if not hint.get("найдено"):
                 self._log(f"Впишите «{подпись}» в реестр по этому фрагменту "
-                          f"(стр. {hint['page']})", "wait")
+                          f"({os.path.basename(path)}, стр. {hint['page']})",
+                          "wait")
                 self._focus_date_cell()
         except Exception as e:
             self._log(f"Фрагмент не показан: {e}", "warn")
