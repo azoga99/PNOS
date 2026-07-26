@@ -23,9 +23,7 @@ import win32con
 
 from config import CONFIG
 from status_manager import get_stage_status, set_stage_status, is_point_blocked
-from workers.win_dialogs import (
-    click_dialog_button, dialog_buttons, describe_dialogs, is_dialog_class,
-)
+from workers.win_dialogs import describe_dialogs
 
 def safe_close_com(obj, save=False):
     """Безопасное закрытие COM-объекта (книги или документа)."""
@@ -47,22 +45,13 @@ import win32process
 
 
 class WordDialogKiller:
-    """
-    Охотник за окнами: жмёт «Да»/«ОК» на диалоговых окнах процесса Word.
-
-    Кнопка нажимается сообщением (см. workers.win_dialogs) — без фокуса и без
-    вывода окна на передний план. Прежний способ (SetForegroundWindow плюс
-    SendKeys) работал только когда ПНОС сам был активен, и слияние на этапе
-    «Создание отчёта» стояло, пока пользователь не кликнет по окну программы.
-    """
+    """Охотник за окнами: нажимает Enter (Да) на любом диалоговом окне процесса Word."""
     def __init__(self, log_callback, word_pid: int = 0):
         self._stop = threading.Event()
         self._t = None
         self.count = 0
         self.log_callback = log_callback
         self.word_pid = word_pid  # PID чтобы ловить только его диалоги
-        self._seen = set()        # заголовки, о которых уже писали в лог
-        self._tried = set()       # окна, по которым уже была попытка нажатия
 
     def start(self):
         self._t = threading.Thread(target=self._run, daemon=True)
@@ -103,45 +92,22 @@ class WordDialogKiller:
             )
             matches_sql_title = any(k in title for k in keywords)
 
-            if not (matches_word_pid or matches_sql_title):
-                return True
+            if matches_word_pid or matches_sql_title:
+                title_log = title if title else "[Без заголовка]"
+                # Логируем только если это реально похоже на диалог выбора (чтобы не спамить)
+                if "выбор" in title or "таблиц" in title or "select" in title or "sql" in title or matches_word_pid:
+                    self.log_callback(f"   [DialogKiller] Вижу окно '{title_log}' (PID match: {matches_word_pid}), нажимаем Enter...")
+                    # Пробуем несколько способов нажать кнопку
+                    win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, win32con.VK_RETURN, 0)
+                    win32gui.PostMessage(hwnd, win32con.WM_KEYUP, win32con.VK_RETURN, 0)
 
-            # Пропускаем только сами окна приложений — по классу. Раньше здесь
-            # стояло «нет дочерних кнопок — не диалог», и это оказалось
-            # ошибкой: часть диалогов Excel рисует кнопки собственными
-            # контролами, класса «Button» у них нет, и такое окно переставало
-            # закрываться вовсе.
-            класс = win32gui.GetClassName(hwnd)
-            if not is_dialog_class(класс):
-                return True
+                    # Жесткий метод если PostMessage не сработал
+                    win32gui.SetForegroundWindow(hwnd)
+                    import win32com.client
+                    shell = win32com.client.Dispatch("WScript.Shell")
+                    shell.SendKeys("~") # Enter
 
-            # Логируем каждый заголовок один раз — иначе журнал забивается:
-            # охотник обходит окна семь раз в секунду.
-            новый = title not in self._seen
-            self._seen.add(title)
-            # Окно живо со второго прохода — первое нажатие не помогло, значит
-            # можно давить сильнее.
-            повтор = hwnd in self._tried
-            self._tried.add(hwnd)
-            кнопки = dialog_buttons(hwnd)
-            нажата = (click_dialog_button(
-                hwnd, log=self.log_callback if новый else None,
-                escalate=повтор) if кнопки else None)
-            if нажата and not повтор:
-                self.count += 1
-                return True
-
-            # Кнопку нажать не вышло (или не помогло) — прежний способ: Enter
-            # в окно диалога. Он работает не всегда (нужен фокус), но хуже от
-            # него не бывает.
-            win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, win32con.VK_RETURN, 0)
-            win32gui.PostMessage(hwnd, win32con.WM_KEYUP, win32con.VK_RETURN, 0)
-            if новый:
-                подписи = (", ".join(f"«{c}»" for _, c in кнопки)
-                           if кнопки else "кнопок класса Button нет")
-                self.log_callback(
-                    f"   [DialogKiller] окно «{title or '[без заголовка]'}» "
-                    f"(класс {класс}): {подписи} — послан Enter")
+                    self.count += 1
         except Exception:
             pass
         return True
@@ -798,8 +764,10 @@ class Stage4Worker(QThread):
                         time.sleep(0.5)
                         
                         # Сторож: если привязка встала, в журнале должно быть
-                        # видно, какое окно висит, — иначе этап выглядит просто
-                        # зависшим (так и было, пока диалог ждал фокуса).
+                        # видно, какое окно висит. Word показывает здесь
+                        # подтверждение SQL-команды, а охотник гасит его только
+                        # когда окно ПНОС активно — иначе этап просто стоит, и
+                        # без этой записи причина не видна.
                         watchdog = self._merge_watchdog(wd_dk.word_pid)
                         try:
                             doc.MailMerge.OpenDataSource(
