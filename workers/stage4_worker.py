@@ -24,7 +24,7 @@ import win32con
 from config import CONFIG
 from status_manager import get_stage_status, set_stage_status, is_point_blocked
 from workers.win_dialogs import (
-    click_dialog_button, dialog_buttons, describe_dialogs,
+    click_dialog_button, dialog_buttons, describe_dialogs, is_dialog_class,
 )
 
 def safe_close_com(obj, save=False):
@@ -62,6 +62,7 @@ class WordDialogKiller:
         self.log_callback = log_callback
         self.word_pid = word_pid  # PID чтобы ловить только его диалоги
         self._seen = set()        # заголовки, о которых уже писали в лог
+        self._tried = set()       # окна, по которым уже была попытка нажатия
 
     def start(self):
         self._t = threading.Thread(target=self._run, daemon=True)
@@ -105,32 +106,42 @@ class WordDialogKiller:
             if not (matches_word_pid or matches_sql_title):
                 return True
 
-            # Класс окна не проверяем: в разных версиях Word диалоги бывают не
-            # только «#32770». Признак диалога — наличие кнопок «Да»/«ОК»;
-            # у главного окна Word таких дочерних кнопок нет.
-            кнопки = dialog_buttons(hwnd)
-            if not кнопки:
+            # Пропускаем только сами окна приложений — по классу. Раньше здесь
+            # стояло «нет дочерних кнопок — не диалог», и это оказалось
+            # ошибкой: часть диалогов Excel рисует кнопки собственными
+            # контролами, класса «Button» у них нет, и такое окно переставало
+            # закрываться вовсе.
+            класс = win32gui.GetClassName(hwnd)
+            if not is_dialog_class(класс):
                 return True
 
             # Логируем каждый заголовок один раз — иначе журнал забивается:
             # охотник обходит окна семь раз в секунду.
             новый = title not in self._seen
             self._seen.add(title)
-            нажата = click_dialog_button(
-                hwnd, log=self.log_callback if новый else None)
-            if нажата:
+            # Окно живо со второго прохода — первое нажатие не помогло, значит
+            # можно давить сильнее.
+            повтор = hwnd in self._tried
+            self._tried.add(hwnd)
+            кнопки = dialog_buttons(hwnd)
+            нажата = (click_dialog_button(
+                hwnd, log=self.log_callback if новый else None,
+                escalate=повтор) if кнопки else None)
+            if нажата and not повтор:
                 self.count += 1
                 return True
 
-            # Кнопки есть, но утвердительной среди них нет — пробуем прежний
-            # способ, вдруг у диалога нестандартная раскладка.
+            # Кнопку нажать не вышло (или не помогло) — прежний способ: Enter
+            # в окно диалога. Он работает не всегда (нужен фокус), но хуже от
+            # него не бывает.
             win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, win32con.VK_RETURN, 0)
             win32gui.PostMessage(hwnd, win32con.WM_KEYUP, win32con.VK_RETURN, 0)
             if новый:
-                подписи = ", ".join(f"«{c}»" for _, c in кнопки)
+                подписи = (", ".join(f"«{c}»" for _, c in кнопки)
+                           if кнопки else "кнопок класса Button нет")
                 self.log_callback(
-                    f"   [DialogKiller] диалог «{title or '[без заголовка]'}»: "
-                    f"утвердительной кнопки нет (есть: {подписи}), послан Enter")
+                    f"   [DialogKiller] окно «{title or '[без заголовка]'}» "
+                    f"(класс {класс}): {подписи} — послан Enter")
         except Exception:
             pass
         return True

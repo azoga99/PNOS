@@ -24,7 +24,7 @@ import win32con
 
 from config import CONFIG
 from status_manager import get_stage_status, set_stage_status, is_point_blocked
-from workers.win_dialogs import click_dialog_button, DIALOG_CLASS
+from workers.win_dialogs import click_dialog_button, is_dialog_class
 
 
 # =====================================================================
@@ -96,7 +96,8 @@ class DialogKiller:
         self._t = None
         self.count = 0
         self.log_callback = log_callback
-        self._seen = set()
+        self._seen = set()        # заголовки, о которых уже писали в лог
+        self._tried = set()       # окна, по которым уже была попытка нажатия
 
     def start(self):
         self._t = threading.Thread(target=self._run, daemon=True)
@@ -121,17 +122,24 @@ class DialogKiller:
         try:
             if not win32gui.IsWindowVisible(hwnd):
                 return True
-            if win32gui.GetClassName(hwnd) != DIALOG_CLASS:
+            # Класс главного окна Excel пропускаем, остальное считаем диалогом:
+            # часть окон Excel рисует кнопки собственными контролами, и жёсткая
+            # проверка на «#32770» такие окна теряла.
+            if not is_dialog_class(win32gui.GetClassName(hwnd)):
                 return True
             t = (win32gui.GetWindowText(hwnd) or "").lower()
             if any(k in t for k in ("excel", "имен", "name", "конфликт")):
                 новый = t not in self._seen
                 self._seen.add(t)
-                if click_dialog_button(hwnd,
-                                       log=self.log_callback if новый else None):
+                повтор = hwnd in self._tried
+                self._tried.add(hwnd)
+                нажата = click_dialog_button(
+                    hwnd, log=self.log_callback if новый else None,
+                    escalate=повтор)
+                if нажата and not повтор:
                     self.count += 1
                 else:
-                    # Кнопки не опознались — прежний способ как запасной.
+                    # Не помогло — прежний способ как запасной.
                     win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN,
                                          win32con.VK_RETURN, 0)
         except Exception:

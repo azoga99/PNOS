@@ -34,6 +34,23 @@ BUTTON_PRIORITY = ("да", "yes", "ок", "ok", "продолжить", "continu
 
 DIALOG_CLASS = "#32770"
 
+#: Классы главных окон Office — их трогать не нужно. Всё остальное считаем
+#: диалогом: у части диалогов Excel кнопки нарисованы собственными контролами,
+#: класса «Button» у них нет, и признак «есть дочерние кнопки» отсекал их
+#: вместе с мусором — окно переставало закрываться вовсе.
+MAIN_WINDOW_CLASSES = ("OpusApp", "XLMAIN")
+
+
+def is_dialog_class(class_name: str) -> bool:
+    """
+    Считать ли окно с таким классом диалогом, который надо закрыть.
+
+    Диалогом считается всё, кроме самих окон приложений. Проверять «класс
+    равен #32770» нельзя: часть окон Office этому классу не соответствует, и
+    такие окна переставали закрываться вовсе.
+    """
+    return (class_name or "") not in MAIN_WINDOW_CLASSES
+
 
 def _clean(caption: str) -> str:
     """Подпись кнопки без ускорителя и пробелов: «&Да» → «да»."""
@@ -79,12 +96,17 @@ def dialog_buttons(hwnd) -> list[tuple[int, str]]:
     return out
 
 
-def click_dialog_button(hwnd, log=None) -> str | None:
+def click_dialog_button(hwnd, log=None, escalate: bool = False) -> str | None:
     """
     Нажать подходящую кнопку диалога. Возвращает её подпись или None.
 
     Сообщения отправляются через PostMessage — вызов не блокируется, даже если
     окно Office занято своим модальным циклом.
+
+    `escalate` — окно уже видели на прошлом проходе, BM_CLICK не помог: тогда
+    добавляем WM_COMMAND от имени диалога. Сразу оба сообщения слать нельзя:
+    если BM_CLICK сработал, второе нажатие может проскочить в следующий шаг
+    мастера.
     """
     кнопки = dialog_buttons(hwnd)
     if not кнопки:
@@ -96,13 +118,12 @@ def click_dialog_button(hwnd, log=None) -> str | None:
     btn, caption = кнопки[idx]
     try:
         win32gui.PostMessage(btn, win32con.BM_CLICK, 0, 0)
-        # Запасной путь: некоторые диалоги реагируют только на WM_COMMAND от
-        # родителя — стоит копейки и не мешает, если сработал BM_CLICK.
-        ctrl_id = win32gui.GetDlgCtrlID(btn)
-        if ctrl_id:
-            win32gui.PostMessage(
-                hwnd, win32con.WM_COMMAND,
-                (win32con.BN_CLICKED << 16) | (ctrl_id & 0xFFFF), btn)
+        if escalate:
+            ctrl_id = win32gui.GetDlgCtrlID(btn)
+            if ctrl_id:
+                win32gui.PostMessage(
+                    hwnd, win32con.WM_COMMAND,
+                    (win32con.BN_CLICKED << 16) | (ctrl_id & 0xFFFF), btn)
     except Exception:
         return None
 
@@ -128,15 +149,17 @@ def describe_dialogs(pid: int) -> list[str]:
         try:
             if not win32gui.IsWindowVisible(hwnd):
                 return True
-            if win32gui.GetClassName(hwnd) != DIALOG_CLASS:
+            класс = win32gui.GetClassName(hwnd)
+            if not is_dialog_class(класс):
                 return True
             _, win_pid = win32process.GetWindowThreadProcessId(hwnd)
             if pid and win_pid != pid:
                 return True
+            заголовок = win32gui.GetWindowText(hwnd) or ""
+            if not заголовок:
+                return True          # безымянные служебные окна — не диалоги
             подписи = ", ".join(f"«{c}»" for _, c in dialog_buttons(hwnd)) or "—"
-            найдено.append(
-                f"«{win32gui.GetWindowText(hwnd) or '[без заголовка]'}» "
-                f"(кнопки: {подписи})")
+            найдено.append(f"«{заголовок}» (класс {класс}, кнопки: {подписи})")
         except Exception:
             pass
         return True
