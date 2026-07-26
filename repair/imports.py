@@ -53,15 +53,17 @@ def _cell_str(v) -> str:
     return str(v).strip()
 
 
-def _to_excel_value(s: str):
-    """Строка → значение для Excel: число, если это число, иначе текст."""
-    t = (s or "").strip()
-    if not t:
-        return ""
-    try:
-        return float(t.replace(",", "."))
-    except ValueError:
-        return t
+def _to_excel_value(s: str) -> str:
+    """
+    Строка → значение для Excel. Всегда ТЕКСТ.
+
+    Замеры на листе «Импорт» лежат текстом с точкой («6.9»), формат ячеек «@»,
+    а блок отчёта (колонки AH…AS) переносит значение как есть: `=IF(F115="","",
+    F115)`. Число 6.0 в такой ячейке печатается в отчёте как «6» — рядом с
+    «6.9» соседних строк это читается как ошибка замера. Расчётные листы
+    («Табл», «ТаблТв», «Табл2») берут значение через VALUE() и текст понимают.
+    """
+    return (s or "").strip()
 
 
 # ─── Чтение (openpyxl, без Excel) ─────────────────────────────────────
@@ -186,7 +188,12 @@ def apply_ops_com(worksheet, ops: list[WriteOp]) -> int:
     """
     Применить операции к листу открытой COM-книги. Возвращает число записей.
     Сохранение книги — на вызывающей стороне.
+
+    Формат ячейки принудительно текстовый: без него Excel сам превращает
+    строку «6.0» в число 6, и отчёт печатает замер без десятых.
     """
     for op in ops:
-        worksheet.Cells(op.row, op.col).Value = op.value
+        cell = worksheet.Cells(op.row, op.col)
+        cell.NumberFormat = "@"
+        cell.Value = op.value
     return len(ops)

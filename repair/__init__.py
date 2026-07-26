@@ -16,9 +16,9 @@
 
 from repair.model import ActRef, RepairRecord, Section, Change
 from repair.svedenia import build_svedenia
-from repair.nominals import apply_nominals
+from repair.nominals import apply_nominals, apply_edits, SectionEdit
 
 __all__ = [
     "ActRef", "RepairRecord", "Section", "Change",
-    "build_svedenia", "apply_nominals",
+    "build_svedenia", "apply_nominals", "apply_edits", "SectionEdit",
 ]

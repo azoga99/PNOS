@@ -323,6 +323,26 @@ QLabel#field_note {
     font-size: 11px;
 }
 
+/* Состояние записи модуля «Ремонт». Пока не нажата «Применить выбранное»,
+   согласованные изменения живут только на экране — это должно быть видно,
+   иначе пункт уходит в дальнейшие этапы со старыми замерами. */
+QLabel#apply_state {
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    color: @text_secondary@;
+}
+
+QLabel#apply_state[state="wait"] {
+    color: @warn@;
+    background-color: @warn_bg@;
+    border: 1px solid @warn_border@;
+}
+
+QLabel#apply_state[state="done"] {
+    color: @success@;
+}
+
 QFrame#h_divider {
     background-color: @border@;
     min-height: 1px;

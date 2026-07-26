@@ -81,13 +81,29 @@ def markup_mask(arr: np.ndarray) -> np.ndarray:
     return (mx > 90) & (mx - mn > 45)
 
 
-def ink_mask(arr: np.ndarray) -> np.ndarray:
+#: Порог «цветности» при стирании. Кайма сглаживания подписи уходит в белый
+#: постепенно: (255, 232, 228) — уже почти фон, но глазу это розовое пятно.
+#: Чёрная линия и её серая кайма нейтральны (max−min ≈ 0…6) и порог не берут.
+ERASE_SAT = 10
+
+
+def ink_mask(arr: np.ndarray, sat_tol: int = ERASE_SAT) -> np.ndarray:
     """
     Вся цветная разметка (красные глифы + их сглаженная кайма + цветовой шум
     PNG), но НЕ фон и НЕ чёрные линии. Стирание по этой маске убирает старое
     значение начисто, без синеватых «призраков» по краям.
+
+    Светлая кайма учитывается по ЦВЕТНОСТИ, а не по яркости: проверка «не почти
+    белый» (все каналы > 205) пропускала бледно-розовые пиксели вроде
+    (255, 230, 225), и после правки вокруг нового значения оставалась россыпь
+    розовых точек — видно на карте п.2763, сечение 114.
     """
-    return ~_near_white(arr) & ~_line_mask(arr)
+    r = arr[:, :, 0].astype(int)
+    g = arr[:, :, 1].astype(int)
+    b = arr[:, :, 2].astype(int)
+    colored = (np.maximum(np.maximum(r, g), b)
+               - np.minimum(np.minimum(r, g), b)) > sat_tol
+    return (~_near_white(arr) | colored) & ~_line_mask(arr)
 
 
 def label_bbox_at(arr: np.ndarray, x: int, y: int,

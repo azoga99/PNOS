@@ -112,6 +112,13 @@ _VERDICT = {"ok": ("done", "совпадает с пунктом"),
 
 CHECKLIST_NAME = "_чек-лист_ремонта.txt"
 
+# Колонки таблицы сечений. Правка разнесена на три поля: у перехода Тисп
+# записана двусторонне («6 / 6»), и одно поле «новый номинал» затирало её
+# половиной. Замер по умолчанию выводится из Тисп, но правится отдельно.
+COL_NUM, COL_ELEM, COL_T, COL_D, COL_MEAS, COL_MIN = range(6)
+COL_NEW_T, COL_NEW_D, COL_NEW_M = 6, 7, 8
+NEW_COLS = (COL_NEW_T, COL_NEW_D, COL_NEW_M)
+
 
 class RepairPage(QWidget):
     """Автономная страница модуля «Ремонт»."""
@@ -140,6 +147,12 @@ class RepairPage(QWidget):
         self._doc_page_idx = 0
         self._doc_pages = 0
         self._id_map = None            # карта разделов комплекта ИД
+        self._ocr_done: set[str] = set()   # документы, уже распознанные
+        self._ocr_running = False
+        # служебные флаги таблицы сечений и состояния записи
+        self._filling_sections = False
+        self._applied_summary = ""     # итог последней успешной записи
+        self._applied_folder = ""      # пункт, к которому этот итог относится
         self._build_ui()
 
     # ═══════════════════════════════════ UI ═══════════════════════════
@@ -252,15 +265,16 @@ class RepairPage(QWidget):
         btn_open.setCursor(Qt.PointingHandCursor)
         btn_open.clicked.connect(self._doc_open_external)
         nav.addWidget(btn_open)
-        self.btn_ocr = QPushButton("Распознать (OCR)")
+        self.btn_ocr = QPushButton("Распознать заново")
         self.btn_ocr.setObjectName("segment")
         self.btn_ocr.setCursor(Qt.PointingHandCursor)
         self.btn_ocr.setToolTip(
-            "Windows OCR по первым страницам документа: номера и даты актов, "
-            "материал, типоразмеры. Заполняются только пустые ячейки реестра — "
-            "введённое вами не перезаписывается. Рукописные даты (день в "
-            "грифе) распознаются плохо — их вписывайте по превью.")
-        self.btn_ocr.clicked.connect(self._doc_ocr)
+            "Документ распознаётся сам, как только вы его открыли — кнопка "
+            "нужна лишь для повторного прохода. Из распознанного берутся "
+            "номера и даты актов, материал, типоразмеры; заполняются только "
+            "пустые ячейки реестра. Рукописные даты (день в грифе) OCR не "
+            "читает — их вписывайте по превью.")
+        self.btn_ocr.clicked.connect(lambda: self._doc_ocr(force=True))
         nav.addWidget(self.btn_ocr)
         prev_col.addLayout(nav)
         docs_row.addLayout(prev_col, 1)
@@ -301,17 +315,20 @@ class RepairPage(QWidget):
         v2 = QVBoxLayout(tab_sec)
         v2.setSpacing(6)
         hint2 = QLabel(
-            "Отметьте заменённые сечения: впишите номинал новой трубы в колонку "
-            "«Новый номинал» (например 10 или 8.0; для перехода — «12 / 10»). "
-            "Пустая ячейка = сечение не менялось. Задвижки и бобышки по правилам "
-            "не обновляются — при необходимости впишите номинал явно.")
+            "Отметьте заменённые сечения тремя правыми колонками: «Новый Тисп» "
+            "(«6», для перехода «6 / 5»), «Новый диаметр» («108 / 89») и «Новый "
+            "замер» — он подставляется из Тисп сам и правится вручную. Пустое "
+            "поле = не меняется, поэтому у перехода можно поправить только "
+            "замер, оставив двустороннюю Тисп как есть. Задвижки и бобышки по "
+            "правилам не обновляются — при необходимости впишите значения явно.")
         hint2.setObjectName("hint")
         hint2.setWordWrap(True)
         v2.addWidget(hint2)
-        self.tbl_sections = QTableWidget(0, 7)
+        self.tbl_sections = QTableWidget(0, 9)
         self.tbl_sections.setHorizontalHeaderLabels(
             ["Сечение", "Элемент", "Тисп", "Диам", "Замеры", "Мин",
-             "Новый номинал"])
+             "Новый Тисп", "Новый диаметр", "Новый замер"])
+        self.tbl_sections.itemChanged.connect(self._on_section_edited)
         self.tbl_sections.verticalHeader().setVisible(False)
         self.tbl_sections.verticalHeader().setDefaultSectionSize(30)
         self.tbl_sections.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
@@ -421,6 +438,16 @@ class RepairPage(QWidget):
         hdr.setSectionResizeMode(2, QHeaderView.Stretch)
         hdr.setSectionResizeMode(3, QHeaderView.Stretch)
         v3.addWidget(self.tbl_preview, 1)
+
+        # Пока не нажата «Применить выбранное», всё вышесказанное живёт только
+        # на экране. На п.2763 это и вышло боком: сечение поправили, кнопку не
+        # нажали — и пункт ушёл на этапы 4–7 со старыми замерами.
+        self.lbl_apply_state = QLabel("")
+        self.lbl_apply_state.setObjectName("apply_state")
+        self.lbl_apply_state.setWordWrap(True)
+        self.lbl_apply_state.setVisible(False)
+        v3.addWidget(self.lbl_apply_state)
+
         row3 = QHBoxLayout()
         self.btn_apply = QPushButton("Применить выбранное")
         self.btn_apply.setObjectName("green_button")
@@ -634,6 +661,10 @@ class RepairPage(QWidget):
         self._fill_sections(res.get("sections", []))
         self._refresh_preview()
         self._map_autoload()
+        # Первый документ открывается и распознаётся сам — реестр заполняется
+        # без единого нажатия.
+        if self.list_docs.count():
+            self.list_docs.setCurrentRow(0)
 
     # ═════════════════════════ Превью документа ════════════════════════
 
@@ -651,6 +682,9 @@ class RepairPage(QWidget):
             self._doc_show()
         except Exception as e:
             self._log(f"Превью не открылось: {e}", "error")
+            return
+        # Распознавание запускается само: отдельная кнопка была лишним шагом.
+        self._doc_ocr()
 
     def _doc_page(self, delta: int):
         if not self._doc_path:
@@ -675,11 +709,28 @@ class RepairPage(QWidget):
         if self._doc_path and os.path.isfile(self._doc_path):
             os.startfile(self._doc_path)
 
-    def _doc_ocr(self):
+    def _doc_ocr(self, force: bool = False):
+        """
+        Распознать открытый документ.
+
+        Запускается сама при открытии документа: отдельное нажатие кнопки было
+        лишним шагом — распознавание нужно всегда. Повторно один и тот же файл
+        не читается (комплект ИД — это десятки секунд), кнопка «Распознать
+        заново» снимает это ограничение.
+        """
         if not self._doc_path:
             self._log("Сначала выберите документ в списке", "warn")
             return
+        if self._ocr_running:
+            if force:
+                self._log("Распознавание уже идёт — дождитесь окончания", "wait")
+            return
+        if not force and self._doc_path in self._ocr_done:
+            return
+
         from workers.repair_worker import RepairOcrWorker
+        self._ocr_running = True
+        self._ocr_done.add(self._doc_path)
         self.btn_ocr.setEnabled(False)
         w = RepairOcrWorker(self._doc_path, parent=self)
         w.log.connect(lambda m: self._log(m, "info"))
@@ -687,9 +738,16 @@ class RepairPage(QWidget):
         w.result.connect(self._on_ocr)
         w.map_ready.connect(self._on_id_map)
         w.zone_hint.connect(self._on_zone_hint)
-        w.finished_ok.connect(lambda ok: self.btn_ocr.setEnabled(True))
+        w.finished_ok.connect(self._on_ocr_finished)
         self._workers["ocr"] = w
         w.start()
+
+    def _on_ocr_finished(self, ok: bool):
+        self._ocr_running = False
+        self.btn_ocr.setEnabled(True)
+        if not ok and self._doc_path:
+            # Не получилось — пусть следующее открытие документа попробует снова.
+            self._ocr_done.discard(self._doc_path)
 
     def _on_id_map(self, page_map):
         """Карта разделов комплекта ИД: показываем, где что лежит."""
@@ -801,18 +859,48 @@ class RepairPage(QWidget):
     # ═════════════════════════════ Сечения ═════════════════════════════
 
     def _fill_sections(self, sections):
-        self.tbl_sections.setRowCount(len(sections))
-        for r, s in enumerate(sections):
-            vals = [str(s.number), s.element, s.thickness_nom, s.diameter,
-                    " / ".join(m for m in s.measures if m), s.tmin, ""]
-            for c, val in enumerate(vals):
-                it = QTableWidgetItem(val)
-                if c < 6:
-                    it.setFlags(it.flags() & ~Qt.ItemIsEditable)
-                self.tbl_sections.setItem(r, c, it)
-            # строка листа — в данных первой ячейки
-            self.tbl_sections.item(r, 0).setData(Qt.UserRole, s.row)
+        self._filling_sections = True
+        try:
+            self.tbl_sections.setRowCount(len(sections))
+            for r, s in enumerate(sections):
+                vals = [str(s.number), s.element, s.thickness_nom, s.diameter,
+                        " / ".join(m for m in s.measures if m), s.tmin,
+                        "", "", ""]
+                for c, val in enumerate(vals):
+                    it = QTableWidgetItem(val)
+                    if c not in NEW_COLS:
+                        it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                    self.tbl_sections.setItem(r, c, it)
+                # строка листа — в данных первой ячейки
+                self.tbl_sections.item(r, COL_NUM).setData(Qt.UserRole, s.row)
+        finally:
+            self._filling_sections = False
         self._apply_sections_filter()
+
+    def _cell(self, row: int, col: int) -> str:
+        it = self.tbl_sections.item(row, col)
+        return it.text().strip() if it else ""
+
+    def _on_section_edited(self, item):
+        """
+        Правка ячейки: замер подставляется из новой Тисп.
+
+        Труба новая — мерить нечего, поэтому во все точки замеров идёт её
+        номинал. Подставляем только в пустую ячейку: введённое сотрудником
+        значение важнее вычисленного.
+        """
+        if self._filling_sections or item.column() != COL_NEW_T:
+            return
+        from repair.nominals import measure_from_thickness
+
+        замер = measure_from_thickness(item.text())
+        цель = self.tbl_sections.item(item.row(), COL_NEW_M)
+        if замер and цель is not None and not цель.text().strip():
+            self._filling_sections = True
+            try:
+                цель.setText(замер)
+            finally:
+                self._filling_sections = False
 
     def _apply_sections_filter(self):
         """
@@ -830,11 +918,10 @@ class RepairPage(QWidget):
         прятать = self.chk_hide_small.isChecked()
         скрыто = 0
         for r in range(self.tbl_sections.rowCount()):
-            эл = self.tbl_sections.item(r, 1)
-            ном = self.tbl_sections.item(r, 6)
+            эл = self.tbl_sections.item(r, COL_ELEM)
             мелкий = bool(эл) and any(эл.text().strip().lower().startswith(m)
                                       for m in мелкие)
-            заполнен = bool(ном) and bool(ном.text().strip())
+            заполнен = any(self._cell(r, c) for c in NEW_COLS)
             надо_скрыть = прятать and мелкий and not заполнен
             self.tbl_sections.setRowHidden(r, надо_скрыть)
             скрыто += int(надо_скрыть)
@@ -903,16 +990,18 @@ class RepairPage(QWidget):
             self._log("Сечения не прочитаны — сначала «Проверить пункт»", "warn")
             return
 
+        from repair.nominals import measure_from_thickness
+
         # снять прежние пометки
         for r in range(self.tbl_sections.rowCount()):
-            it = self.tbl_sections.item(r, 0)
+            it = self.tbl_sections.item(r, COL_NUM)
             if it is not None:
                 it.setIcon(QIcon())
                 it.setToolTip("")
 
         по_строке = {}
         for r in range(self.tbl_sections.rowCount()):
-            it = self.tbl_sections.item(r, 0)
+            it = self.tbl_sections.item(r, COL_NUM)
             if it is not None:
                 по_строке[it.data(Qt.UserRole)] = r
 
@@ -924,48 +1013,58 @@ class RepairPage(QWidget):
                 if r is None:
                     continue
                 всего += 1
-                it = self.tbl_sections.item(r, 0)
+                it = self.tbl_sections.item(r, COL_NUM)
                 it.setIcon(dot_icon(_DOT["done" if s.однозначно else "warn"]))
-                it.setToolTip(f"{s.строка} → предлагаемый номинал {s.номинал}")
-                if s.однозначно:
-                    цель = self.tbl_sections.item(r, 6)
-                    if цель is not None and not цель.text().strip():
-                        цель.setText(s.номинал)
-                        подставлено += 1
+                it.setToolTip(f"{s.строка} → Тисп {s.номинал}, "
+                              f"диаметр {s.диаметр}")
+                if s.однозначно and not any(self._cell(r, cc) for cc in NEW_COLS):
+                    # Из строки замены известны и толщина, и диаметр — они
+                    # раскладываются по своим колонкам, а замер выводится
+                    # из толщины.
+                    self._set_new_values(r, s.номинал, s.диаметр,
+                                         measure_from_thickness(s.номинал))
+                    подставлено += 1
         self._log(f"Подбор: помечено сечений {всего}, номинал подставлен "
                   f"в {подставлено}", "info")
         self._refresh_map_plan()
 
-    def _collect_nominals(self):
-        """Из колонки «Новый номинал» → ({row: float}, {row: (толщ, диам)}, ошибки)."""
-        rows: dict[int, float] = {}
-        perehod: dict[int, tuple] = {}
+    def _set_new_values(self, row: int, тисп: str, диаметр: str, замер: str):
+        """Записать три поля правки разом, не дёргая автоподстановку замера."""
+        self._filling_sections = True
+        try:
+            for col, val in ((COL_NEW_T, тисп), (COL_NEW_D, диаметр),
+                             (COL_NEW_M, замер)):
+                it = self.tbl_sections.item(row, col)
+                if it is not None:
+                    it.setText(val)
+        finally:
+            self._filling_sections = False
+
+    def _collect_edits(self):
+        """Три правых колонки → ({строка листа: SectionEdit}, ошибки)."""
+        from repair.nominals import SectionEdit
+
+        edits: dict[int, SectionEdit] = {}
         errors: list[str] = []
-        secs = {s.row: s for s in self._scan.get("sections", [])}
         for r in range(self.tbl_sections.rowCount()):
-            it = self.tbl_sections.item(r, 6)
-            text = (it.text().strip() if it else "")
-            if not text:
+            тисп = self._cell(r, COL_NEW_T)
+            диам = self._cell(r, COL_NEW_D)
+            замер = self._cell(r, COL_NEW_M)
+            if not (тисп or диам or замер):
                 continue
-            sheet_row = self.tbl_sections.item(r, 0).data(Qt.UserRole)
-            sec = secs.get(sheet_row)
-            num = self.tbl_sections.item(r, 0).text()
-            if "/" in text:
-                # переход: «12 / 10» — толщина текстом, номинал = первое число
+            num = self._cell(r, COL_NUM)
+            if замер:
+                # Замер уходит в ячейки Excel числом — проверяем сразу, иначе
+                # ошибка всплывёт уже во время записи в книгу.
                 try:
-                    first = float(text.split("/")[0].replace(",", "."))
+                    float(замер.replace(",", "."))
                 except ValueError:
-                    errors.append(f"сечение {num}: не разобрано «{text}»")
+                    errors.append(f"сечение {num}: замер «{замер}» — не число")
                     continue
-                rows[sheet_row] = first
-                diam = sec.diameter if sec else ""
-                perehod[sheet_row] = (text, diam)
-            else:
-                try:
-                    rows[sheet_row] = float(text.replace(",", "."))
-                except ValueError:
-                    errors.append(f"сечение {num}: не разобрано «{text}»")
-        return rows, perehod, errors
+            sheet_row = self.tbl_sections.item(r, COL_NUM).data(Qt.UserRole)
+            edits[sheet_row] = SectionEdit(thickness=тисп, diameter=диам,
+                                           measure=замер)
+        return edits, errors
 
     # ═════════════════════════════ Предпросмотр ════════════════════════
 
@@ -981,7 +1080,7 @@ class RepairPage(QWidget):
             self._refresh_map_plan()
 
     def _refresh_preview(self):
-        from repair.nominals import apply_nominals
+        from repair.nominals import apply_edits
         from repair.imports import build_write_ops
         from repair.svedenia import build_svedenia
 
@@ -995,6 +1094,7 @@ class RepairPage(QWidget):
                 or not self._scan["docs"].has_repair:
             self._set_svedenia_text("")
             self.txt_sved_now.setPlainText("")
+            self.lbl_apply_state.setVisible(False)
             return
 
         records = self._registry_records()
@@ -1011,10 +1111,10 @@ class RepairPage(QWidget):
             self._set_svedenia_text(собранная)
         svedenia = self._svedenia_text()
 
-        rows, perehod, errors = self._collect_nominals()
+        edits, errors = self._collect_edits()
         for e in errors:
             self._log(e, "error")
-        new, changes = apply_nominals(sections, rows, perehod, by_row=True)
+        new, changes = apply_edits(sections, edits, by_row=True)
 
         # операции, сгруппированные по строке листа — для согласования с галочками
         ops_all = build_write_ops(sections, new)
@@ -1042,8 +1142,10 @@ class RepairPage(QWidget):
             self.tbl_preview.setItem(i, 3, QTableWidgetItem(ch.after))
         self.tbl_preview.resizeRowsToContents()
 
-        # сопоставление галочка → операции: по номеру строки листа
-        sheet_rows_in_order = [s.row for s in new if s.row in rows]
+        # Сопоставление галочка → операции по номеру строки листа. Порядок тот
+        # же, в каком apply_edits собирал changes: обход исходных сечений.
+        sheet_rows_in_order = [s.row for s in sections
+                               if s.row in edits and not edits[s.row].is_empty()]
         self._preview = {
             "records": records,
             "svedenia": svedenia,
@@ -1054,6 +1156,35 @@ class RepairPage(QWidget):
         has_any = bool(changes) or bool(records)
         self.btn_apply.setEnabled(has_any)
         self.btn_checklist.setEnabled(has_any)
+        # «Не записано» показываем не по факту наличия строк, а по расхождению
+        # с файлами: после записи отчёт уже содержит нужную строку, и плашка
+        # честно гаснет.
+        строка_разошлась = bool(svedenia) and svedenia != " ".join((now or "").split())
+        self._set_apply_state(len(changes), bool(changes) or строка_разошлась)
+
+    def _set_apply_state(self, n_changes: int, надо_писать: bool):
+        """Плашка «записано / ещё не записано» под таблицей предпросмотра."""
+        lbl = self.lbl_apply_state
+        записано = (self._applied_summary
+                    if self._applied_folder == self._point_folder() else "")
+        if надо_писать:
+            хвост = (f"сечений к правке: {n_changes}"
+                     if n_changes else "строка отчёта")
+            lbl.setText(
+                f"Изменения ещё не записаны в файлы пункта ({хвост}). "
+                f"Нажмите «Применить выбранное» — до этого листы «Импорт», "
+                f"лист «Ремонт» и отчёт остаются прежними, и следующие этапы "
+                f"соберут отчёт по старым замерам.")
+            lbl.setProperty("state", "wait")
+        elif записано:
+            lbl.setText(записано)
+            lbl.setProperty("state", "done")
+        else:
+            lbl.setVisible(False)
+            return
+        lbl.setVisible(True)
+        lbl.style().unpolish(lbl)
+        lbl.style().polish(lbl)
 
     # ── строка «Сведения о ремонте»: показ и правка ──────────────────
 
@@ -1143,6 +1274,11 @@ class RepairPage(QWidget):
     def _on_applied(self, ok: bool):
         self.btn_apply.setEnabled(True)
         if ok:
+            self._applied_folder = self._point_folder()
+            self._applied_summary = (
+                "Записано в файлы пункта: листы «Импорт» и «Импорт (ПР)», лист "
+                "«Ремонт», строка «Сведения о ремонте» в отчёте. Бэкап и "
+                "журнал созданы.")
             self._log("Готово. Повторное сканирование пункта...", "done")
             self._start_scan()
 
@@ -1285,18 +1421,24 @@ class RepairPage(QWidget):
         self._refresh_map_plan()
 
     def _planned_edits(self) -> list[tuple[int, str]]:
-        """Что предстоит поправить на карте: (номер сечения, новое значение)
-        из колонки «Новый номинал» вкладки «Сечения»."""
+        """
+        Что предстоит поправить на карте: (номер сечения, новое значение).
+
+        На схеме в скобках стоит замер, а не Тисп, поэтому берётся колонка
+        «Новый замер»; если она пуста — значение выводится из новой Тисп.
+        """
+        from repair.nominals import measure_from_thickness
+
         out = []
         for r in range(self.tbl_sections.rowCount()):
-            it_new = self.tbl_sections.item(r, 6)
-            текст = (it_new.text().strip() if it_new else "")
+            текст = (self._cell(r, COL_NEW_M)
+                     or measure_from_thickness(self._cell(r, COL_NEW_T)))
             if not текст:
                 continue
-            it_num = self.tbl_sections.item(r, 0)
-            if it_num is None or not it_num.text().strip().isdigit():
+            номер = self._cell(r, COL_NUM)
+            if not номер.isdigit():
                 continue
-            out.append((int(it_num.text().strip()), текст))
+            out.append((int(номер), текст))
         return out
 
     def _refresh_map_plan(self):

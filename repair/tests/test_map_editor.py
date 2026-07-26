@@ -77,6 +77,25 @@ def test_erase_red_keeps_black_line():
     assert (arr[47, span.x1:span.x2] == BLACK).all(axis=-1).any()
 
 
+def test_erase_red_removes_pale_antialiasing():
+    """
+    Бледная кайма сглаживания тоже стирается.
+
+    Проверка «не почти белый» её пропускала, и после правки вокруг нового
+    значения оставалась россыпь розовых точек (карта п.2763, сечение 114).
+    Порог теперь по цветности, а нейтральная серая кайма чёрной линии цела.
+    """
+    arr = _blank()
+    _draw_label(arr, 50, 40)
+    bb = label_bbox_at(arr, 60, 48)
+    span = find_value_span(arr, bb)
+    arr[span.y1 + 1, span.x1 + 1] = (255, 232, 228)      # бледно-розовая кайма
+    arr[span.y1 + 2, span.x1 + 1] = (208, 208, 208)      # серая кайма линии
+    erase_red(arr, span)
+    assert tuple(arr[span.y1 + 1, span.x1 + 1]) == WHITE
+    assert tuple(arr[span.y1 + 2, span.x1 + 1]) == (208, 208, 208)
+
+
 def test_copy_red_transfers_glyphs():
     arr = _blank()
     _draw_glyph(arr, 300, 80)

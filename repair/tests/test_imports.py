@@ -107,12 +107,12 @@ def test_build_write_ops_only_changed():
     ops = build_write_ops(old, new)
 
     got = {(o.row, o.col): o.value for o in ops}
-    assert got[(9, COL_THICK)] == 8.0           # Тисп
-    assert got[(9, COL_T1)] == 8.0              # т.1
-    assert got[(9, COL_T1 + 1)] == 8.0          # т.2
-    assert (9, COL_T1 + 2) not in got           # пустая точка не дорисована
-    assert got[(9, COL_T1 + 3)] == 8.0          # т.4
-    assert got[(9, COL_TMIN)] == 8.0
+    assert got[(9, COL_THICK)] == "8"            # Тисп
+    assert got[(9, COL_T1)] == "8.0"             # т.1
+    assert got[(9, COL_T1 + 1)] == "8.0"         # т.2
+    assert (9, COL_T1 + 2) not in got            # пустая точка не дорисована
+    assert got[(9, COL_T1 + 3)] == "8.0"         # т.4
+    assert got[(9, COL_TMIN)] == "8.0"
     assert (9, COL_DIAM) not in got             # диаметр не менялся
 
 
@@ -137,21 +137,39 @@ def test_build_write_ops_untouched_section_empty():
 class _FakeWS:
     def __init__(self):
         self.written = {}
+        self.formats = {}
     def Cells(self, r, c):
         ws = self
         class _C:
             def __setattr__(self, name, value):
                 if name == "Value":
                     ws.written[(r, c)] = value
+                elif name == "NumberFormat":
+                    ws.formats[(r, c)] = value
                 object.__setattr__(self, name, value)
         return _C()
 
 
 def test_apply_ops_com():
     ws = _FakeWS()
-    n = apply_ops_com(ws, [WriteOp(9, COL_THICK, 8.0), WriteOp(9, COL_T1, 8.0)])
+    n = apply_ops_com(ws, [WriteOp(9, COL_THICK, "8"), WriteOp(9, COL_T1, "8.0")])
     assert n == 2
-    assert ws.written == {(9, COL_THICK): 8.0, (9, COL_T1): 8.0}
+    assert ws.written == {(9, COL_THICK): "8", (9, COL_T1): "8.0"}
+    # формат — текстовый, иначе Excel сам превратит «8.0» в число 8
+    assert ws.formats == {(9, COL_THICK): "@", (9, COL_T1): "@"}
+
+
+def test_write_ops_are_text():
+    """
+    Замеры уходят в книгу строкой: блок отчёта переносит значение как есть,
+    и число 6.0 печаталось бы как «6» рядом с «6.9» соседних строк.
+    """
+    old = [Section(114, "Переход", "6 / 6", "108 / 89",
+                   ["2.6", "2.8"], "2.6", row=115)]
+    new, _ = apply_nominals(old, {114: 6.0}, {114: ("6 / 6", "108 / 89")})
+    values = {o.value for o in build_write_ops(old, new)}
+    assert values == {"6.0"}
+    assert all(isinstance(v, str) for v in values)
 
 
 # ─── Живой путь: применение по строкам ────────────────────────────────

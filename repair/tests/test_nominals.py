@@ -89,3 +89,75 @@ def test_untouched_section_is_same_object():
     res, changes = apply_nominals([s], {7: 8.0})
     assert res[0] is s
     assert changes == []
+
+
+# ─── Раздельные поля правки (Тисп / диаметр / замер) ──────────────────
+
+def _perehod_114():
+    """Реальное сечение 114 п.2763: переход с двусторонней Тисп."""
+    from repair.model import Section
+    return Section(number=114, element="Переход", thickness_nom="6 / 6",
+                   diameter="108 / 89",
+                   measures=["2.6", "2.6", "2.8", "2.8", "5.0", "5.2"],
+                   tmin="2.6", row=115)
+
+
+def test_edit_measure_only_keeps_two_sided_thickness():
+    """
+    Замер задан, Тисп не трогаем — двусторонняя «6 / 6» остаётся как была.
+
+    Ровно этого не хватало в одном поле «новый номинал»: число 6.0 затирало
+    «6 / 6» половиной, и переход выглядел как односторонний.
+    """
+    from repair.nominals import SectionEdit, apply_edits
+    s = _perehod_114()
+    (res,), (ch,) = apply_edits([s], {114: SectionEdit(measure="6.0")})
+    assert res.thickness_nom == "6 / 6"
+    assert res.diameter == "108 / 89"
+    assert res.measures == ["6.0"] * 6
+    assert res.tmin == "6.0"
+    assert "Тисп 6 / 6 · 108 / 89 · замеры 6.0/6.0" in ch.after
+
+
+def test_edit_fields_are_independent():
+    """Каждое поле правится отдельно; пустое — не меняется."""
+    from repair.nominals import SectionEdit, apply_edits
+    s = _perehod_114()
+    edit = SectionEdit(thickness="6 / 5", diameter="108 / 76", measure="5.0")
+    (res,), _ = apply_edits([s], {114: edit})
+    assert (res.thickness_nom, res.diameter) == ("6 / 5", "108 / 76")
+    assert res.measures == ["5.0"] * 6
+
+
+def test_edit_measure_derived_from_thickness():
+    """Замер не введён — выводится из новой Тисп (труба новая, мерить нечего)."""
+    from repair.nominals import SectionEdit, apply_edits, measure_from_thickness
+    s = _perehod_114()
+    (res,), _ = apply_edits([s], {114: SectionEdit(thickness="8")})
+    assert res.measures == ["8.0"] * 6 and res.tmin == "8.0"
+    assert measure_from_thickness("12 / 10") == "12.0"
+    assert measure_from_thickness("") == ""
+
+
+def test_edit_diameter_only_keeps_measures():
+    """Правка одного диаметра замеры не трогает."""
+    from repair.nominals import SectionEdit, apply_edits
+    s = _perehod_114()
+    (res,), _ = apply_edits([s], {114: SectionEdit(diameter="108 / 76")})
+    assert res.measures == s.measures and res.tmin == s.tmin
+    assert res.thickness_nom == "6 / 6"
+
+
+def test_edit_by_row_addresses_sheet_rows():
+    """Живой путь адресуется строкой листа: номера сечений не уникальны."""
+    from repair.nominals import SectionEdit, apply_edits
+    s = _perehod_114()
+    res, changes = apply_edits([s], {115: SectionEdit(measure="6.0")}, by_row=True)
+    assert res[0].tmin == "6.0" and len(changes) == 1
+
+
+def test_empty_edit_changes_nothing():
+    from repair.nominals import SectionEdit, apply_edits
+    s = _perehod_114()
+    res, changes = apply_edits([s], {114: SectionEdit()})
+    assert res[0] is s and changes == []
