@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Тесты извлечения полей из OCR-текста (Э4 слой 2, чистая логика)."""
 
+import pytest
+
 from repair.doc_extract import extract_doc_info, normalize_numero
 
 
@@ -142,6 +144,44 @@ def test_replacement_line_survives_ocr_noise():
     assert is_replacement_line("1 Пе еход 108х6-89х6 шт. Концент ический Ст. 20")
 
 
+def test_element_name_may_be_unreadable():
+    """
+    Название элемента OCR читает не всегда: «Труба» на акте п.2688 приходит
+    как «Т ба» — 60 из 100 при нечётком сравнении, ниже любого порога.
+    """
+    from repair.doc_extract import element_of
+
+    assert element_of("1 Труба 57х6 32 п. м. Бесшовная ст. 20") == "труба"
+    assert element_of("1 Пе еход 108х6-89х6 шт. Концент ический Ст. 20") == "переход"
+    assert element_of("1 Т ойник 108х6-108х6 1 шт. Бесшовный ст. 20") == "тройник"
+    assert element_of("Т ба 45х4 Бесшовная ст. 20") == ""
+    assert element_of("1 108х6 2,5 п. м. Бесшовная ст. 20") == ""
+    assert element_of("") == ""
+
+
+def test_replacement_row_without_element_name():
+    """
+    Строки таблицы замены с шести живых актов, где название не прочиталось.
+
+    Отбрасывать их нельзя: у пункта 2688 это единственные данные о замене —
+    комплекта ИД у него нет вовсе, и колонка «Замена» оставалась пустой.
+    """
+    from repair.doc_extract import is_replacement_line
+
+    assert is_replacement_line("Т ба 45х4 Бесшовная ст. 20")          # п.2688
+    assert is_replacement_line("1 108х6 2,5 п. м. Бесшовная ст. 20")
+    assert is_replacement_line("108х6 2 п. м. Бесшовная ст. 20")      # без номера
+
+
+def test_scheme_labels_are_not_replacement_rows():
+    """Подписи типоразмеров на самой схеме — не позиции таблицы."""
+    from repair.doc_extract import is_replacement_line
+
+    assert not is_replacement_line("Ø48х3.5")
+    assert not is_replacement_line("45х4")
+    assert not is_replacement_line("Ø108х6 гребенка-2")
+
+
 def test_welding_journal_rows_are_skipped():
     """В комплекте ИД те же трубы перечислены в журнале сварочных работ."""
     from repair.doc_extract import is_replacement_line
@@ -235,3 +275,44 @@ def test_ocr_artifacts_in_act_number():
     assert "222-1-84" in info.act_numbers
     assert "222-5-03-004" in info.act_numbers   # заключение РК — отфильтруется
                                                 # ниже по конвейеру привязкой
+
+
+# ─── Где на листе искать таблицу замены ────────────────────────────────
+
+def test_heading_fraction_finds_table_position():
+    """
+    Полоса чтения отсчитывается от заголовка «…подлежащих замене».
+
+    Жёсткой полосы не существует: таблица съезжает вслед за схемой дефектного
+    участка. На шести живых актах она оказалась на 0.52, 0.08, 0.81, 0.83,
+    0.79 и 0.81 высоты листа.
+    """
+    from repair.doc_extract import heading_fraction
+
+    lines = [
+        {"text": "Схема дефектного участка", "words": [{"y": 100, "h": 20}]},
+        {"text": "лежащих замене", "words": [{"y": 840, "h": 20}]},
+    ]
+    assert heading_fraction(lines, 1000) == pytest.approx(0.85)
+
+
+def test_heading_fraction_none_when_absent():
+    from repair.doc_extract import heading_fraction
+
+    assert heading_fraction([{"text": "Сварка", "words": [{"y": 5, "h": 2}]}],
+                            100) is None
+    assert heading_fraction([], 100) is None
+    assert heading_fraction([{"text": "замене", "words": []}], 100) is None
+
+
+def test_replacement_band_around_heading():
+    from repair.doc_extract import replacement_band
+
+    низ, верх = replacement_band(0.52)
+    assert низ == pytest.approx(0.50) and верх == pytest.approx(0.68)
+    # у края листа полоса не вылезает за границы
+    assert replacement_band(0.01)[0] == 0.0
+    assert replacement_band(0.95)[1] == 1.0
+    # заголовок не найден — прежняя полоса по умолчанию
+    assert replacement_band(None) == (0.70, 1.0)
+    assert replacement_band(None, default=(0.5, 0.9)) == (0.5, 0.9)

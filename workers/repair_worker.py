@@ -363,8 +363,39 @@ class RepairOcrWorker(QThread):
             out += rows_from_lines(v["lines"])
         return out
 
+    def _replacement_band(self, page: int, rotation: int = 0) -> tuple:
+        """
+        Где на листе лежит таблица замены.
+
+        Жёсткой полосы не существует: таблица съезжает вслед за схемой
+        дефектного участка, у каждого пункта своего размера. На шести живых
+        актах она оказалась на 0.52, 0.08, 0.81, 0.83, 0.79 и 0.81 высоты, и
+        прежняя полоса 0.70–1.00 промахивалась на трёх из шести — данных о
+        замене не было вовсе. Поэтому лист сначала читается целиком, и полоса
+        отсчитывается от заголовка «…подлежащих замене».
+        """
+        from repair.ocr import ocr_zone
+        from repair.doc_extract import heading_fraction, replacement_band
+
+        try:
+            res = ocr_zone(self.pdf_path, page, 0.0, 1.0,
+                           rotation=rotation, scale=2.2)
+            доля = heading_fraction(res["lines"], res["size"][1])
+        except Exception as e:
+            self.log.emit(f"Заголовок таблицы замены не искали: {e}")
+            доля = None
+        полоса = replacement_band(доля, default=self.ZONE_REPLACEMENTS)
+        if доля is None:
+            self.log.emit("Заголовок «подлежащих замене» не найден — "
+                          f"читаю полосу по умолчанию {полоса}")
+        else:
+            self.log.emit(f"Таблица замены на {доля:.2f} высоты листа {page} — "
+                          f"читаю полосу {полоса[0]:.2f}–{полоса[1]:.2f}")
+        return полоса
+
     def _read_replacement_zone(self, page: int, rotation: int = 0) -> list[str]:
-        return self._read_zone(page, self.ZONE_REPLACEMENTS, rotation)
+        return self._read_zone(page, self._replacement_band(page, rotation),
+                               rotation)
 
     def _read_signatures(self, page: int, rotation: int = 0) -> None:
         """

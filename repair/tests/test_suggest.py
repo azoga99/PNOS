@@ -174,3 +174,57 @@ def test_fallback_can_be_switched_off():
     from repair.suggest import suggest_sections
     (s,) = suggest_sections(["Отвод 90°-89х5"], _секции(), по_износу=False)
     assert s.кандидаты == []
+
+
+# ─── Название элемента не прочиталось ──────────────────────────────────
+
+def test_unreadable_element_matched_by_diameter():
+    """
+    OCR не прочитал название — подбираем по одному диаметру, среди всех типов.
+
+    На акте п.2688 строка приходит как «Т ба 45х4 Бесшовная ст. 20», а на
+    актах 222-1-121 и 222-1-143 названия нет вовсе: «1 108х6 2,5 п. м.
+    Бесшовная ст. 20». Раньше такие строки не давали ни одного кандидата.
+    """
+    from repair.suggest import ИСТОЧНИК_БЕЗ_ЭЛЕМЕНТА
+
+    секции = _sections("2775")
+    s = suggest_sections(["1 108х6 2,5 п. м. Бесшовная ст. 20"], секции)[0]
+    assert s.элемент == ""
+    assert s.размеры == [("108", "6")]
+    assert s.кандидаты, "по диаметру 108 в п.2775 сечения есть"
+    assert s.источник == ИСТОЧНИК_БЕЗ_ЭЛЕМЕНТА
+    # Тип элемента неизвестен — подставлять автоматически нельзя даже одному.
+    assert not s.однозначно
+
+
+def test_unreadable_element_falls_back_to_wear():
+    """Диаметра из акта в книге нет — показываем самые утонённые любого типа."""
+    from repair.suggest import ИСТОЧНИК_ИЗНОС
+
+    секции = _sections("2775")
+    s = suggest_sections(["Т ба 999х4 Бесшовная ст. 20"], секции)[0]
+    assert s.элемент == ""
+    assert s.источник == ИСТОЧНИК_ИЗНОС
+    assert not s.однозначно
+    assert "любого типа" in describe(s)
+
+
+def test_unreadable_element_is_named_in_description():
+    """Сотруднику честно сообщаем, что название не прочиталось."""
+    секции = _sections("2775")
+    s = suggest_sections(["1 108х6 2,5 п. м. Бесшовная ст. 20"], секции)[0]
+    текст = describe(s)
+    assert "элемент не прочитан" in текст
+    assert "сверьтесь с таблицей замены" in текст
+
+
+def test_known_element_still_restricts_type():
+    """Прочитанное название по-прежнему сужает поиск — поведение не изменилось."""
+    from repair.suggest import ИСТОЧНИК_РАЗМЕР
+
+    секции = _sections("2775")
+    s = suggest_sections(["1 Труба 108х6 2 п. м. Бесшовная ст. 20"], секции)[0]
+    assert s.элемент == "Труба"
+    assert s.источник == ИСТОЧНИК_РАЗМЕР
+    assert all("труб" in c.element.lower() for c in s.кандидаты)

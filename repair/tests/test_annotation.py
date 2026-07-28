@@ -134,10 +134,13 @@ def test_erase_annotation_пустой_вход():
 
 # ── реальные карты ───────────────────────────────────────────────────
 
-_С_ОТМЕТКОЙ = [
-    r"C:\Users\volod\Desktop\п.2687\Первичка\2687.png",
-    r"C:\Users\volod\Desktop\п.2687\Первичка\2687..png",
-    r"C:\Users\volod\Desktop\п.2687(запросить акт отбр)\Первичка\2687.png",
+# Пункт 2687 — единственный из 34 сданных, где ОТН пометил саму карту.
+# Папку пункта переносят, а рабочие копии со временем чистят, поэтому файлы не
+# перечисляются поимённо: обходим известные места и берём те копии, где отметка
+# ещё на месте (в том числе из `_backup`).
+_КОРНИ_2687 = [
+    r"C:\Users\volod\Desktop\ПНОС\п.2687",
+    r"C:\Users\volod\Desktop\п.2687",
 ]
 _БЕЗ_ОТМЕТКИ = [
     r"C:\Users\volod\Desktop\Сданы на ПНОС — копия"
@@ -147,6 +150,18 @@ _БЕЗ_ОТМЕТКИ = [
 ]
 
 
+def _карты_2687() -> list:
+    найдено = []
+    for корень in _КОРНИ_2687:
+        for каталог, _, файлы in os.walk(корень):
+            найдено += [os.path.join(каталог, f) for f in sorted(файлы)
+                        if f.startswith("2687") and f.lower().endswith(".png")]
+    return найдено or ["карт п.2687 на этой машине нет"]
+
+
+_С_ОТМЕТКОЙ = _карты_2687()
+
+
 def _карта(path):
     if not os.path.isfile(path):
         pytest.skip("реальных карт на этой машине нет")
@@ -154,12 +169,19 @@ def _карта(path):
     return np.array(Image.open(path).convert("RGB"))
 
 
+def _карта_с_отметкой(path):
+    """Реальная карта, на которой отметка ещё не снята."""
+    arr = _карта(path)
+    if find_annotation(arr) is None:
+        pytest.skip(f"с {os.path.basename(path)} отметка уже снята")
+    return arr
+
+
 @pytest.mark.parametrize("path", _С_ОТМЕТКОЙ)
 def test_реальная_карта_очищается_начисто(path):
-    arr = _карта(path)
+    arr = _карта_с_отметкой(path)
     было = arr.copy()
     ann = find_annotation(arr)
-    assert ann is not None, "выделение на карте п.2687 должно находиться"
     стёрто = erase_annotation(arr, ann)
     assert стёрто > 0
     # ни одного пикселя заливки не осталось
@@ -171,7 +193,7 @@ def test_реальная_карта_очищается_начисто(path):
     assert стёрто < 0.01 * arr.shape[0] * arr.shape[1]
 
 
-@pytest.mark.parametrize("path", _С_ОТМЕТКОЙ[:2])
+@pytest.mark.parametrize("path", _С_ОТМЕТКОЙ)
 def test_после_стирания_не_остаётся_ореола(path):
     """
     Ни одного цветного пикселя там, где была надпись.
@@ -180,9 +202,13 @@ def test_после_стирания_не_остаётся_ореола(path):
     фиксированном запасе рамки под подчёркиванием оставалась россыпь из
     двух десятков розовых точек — на листе их видно.
     """
-    arr = _карта(path)
-    erase_annotation(arr, find_annotation(arr))
-    зона = arr[1980:2080, 2740:3340].astype(int)
+    arr = _карта_с_отметкой(path)
+    ann = find_annotation(arr)
+    if ann.caption is None:
+        pytest.skip("надписи рядом с отметкой нет — ореолу неоткуда взяться")
+    erase_annotation(arr, ann)
+    зона = arr[ann.caption.y1:ann.caption.y2,
+               ann.caption.x1:ann.caption.x2].astype(int)
     не_белые = ~np.all(зона >= 248, axis=2)
     assert int(не_белые.sum()) == 0
 

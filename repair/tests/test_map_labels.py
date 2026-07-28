@@ -44,10 +44,16 @@ def labels():
 
 
 def test_finds_most_labels(labels):
-    """На карте около 127 сечений — находиться должно большинство."""
-    assert len(labels) >= 90
+    """
+    На карте около 127 сечений — находиться должно большинство.
+
+    Порог держится у достигнутого: до перехода на признак «номер нарисован
+    цветной краской» здесь находилось 106 сечений, стало 110. Просядет ниже
+    105 — значит распознавание сломали.
+    """
+    assert len(labels) >= 105
     номера = {l.number for l in labels}
-    assert len(номера) >= 90
+    assert len(номера) >= 105
     assert max(номера) <= MAX_SECTION
 
 
@@ -104,3 +110,83 @@ def test_oversized_scales_are_skipped():
     итог = find_labels(arr, scales=(30.0,), log=сообщения.append)
     assert итог == []
     assert any(str(MAX_OCR_DIM) in m for m in сообщения)
+
+
+# ─── Признак подписи: цвет номера, а не читаемость значения ────────────
+
+def test_value_like_accepts_cyrillic_misreads():
+    """
+    Значение в мелком курсиве OCR читает кириллицей — это не повод терять
+    подпись: сам текст значения не используется, его вырезает геометрия.
+    Примеры сняты с карт п.2688 и п.2775.
+    """
+    from repair.map_labels import _value_like
+
+    for токен in ("(3.0)", "(ЗО", "(ЗЯ", "(ЗУ", "(за", "В.Ы", "ИЗ)", "(6.4]",
+                  "(12.4)"):
+        assert _value_like(токен), токен
+
+
+def test_value_like_rejects_title_block_text():
+    """
+    «116 т-и» на карте п.2778 — это «Т-11 в Т-12» из основной надписи, набранное
+    тем же бордовым. Проходило как подпись сечения №116, и правка ушла бы в штамп.
+    """
+    from repair.map_labels import _value_like
+
+    for токен in ("т-и", "Т-12", "", "  ", "108", "12"):
+        assert not _value_like(токен), токен
+
+
+def test_value_like_rejects_glued_neighbour():
+    """
+    «(4.7) 78 (6.1)» на карте п.2775: OCR потерял скобки у чужого значения и
+    выдал номер «47» со «значением» «786.1» — четыре цифры, столько не бывает.
+    """
+    from repair.map_labels import _value_like
+
+    assert not _value_like("786.1")
+
+
+def test_ink_color_is_mode_not_average():
+    """
+    Цвет подписи — самый частый цвет чернил.
+
+    Карта квантована, и вокруг чёрных глифов рассыпан цветной дизер: у надписи
+    «10(1)» на карте п.2704 чёрных пикселей 207, а цветных в ореоле 467.
+    Проверка «цветных больше чёрных» на этом ломалась.
+    """
+    from repair.map_labels import ink_color, is_markup_number
+
+    arr = np.full((40, 40, 3), 255, np.uint8)
+    arr[10:30, 10:30] = (0, 0, 0)                 # тело глифа — чёрное
+    arr[8:32:2, 8:32:3] = (144, 58, 0)            # цветной ореол, но вразнобой
+    arr[9:31:3, 9:31:2] = (58, 144, 219)
+    box = BBox(5, 5, 35, 35)
+    assert ink_color(arr, box) == (0, 0, 0)
+    assert not is_markup_number(arr, box)
+
+
+def test_markup_number_accepts_colored_label():
+    """Бордовые, оранжевые и синие подписи — все свои."""
+    from repair.map_labels import is_markup_number
+
+    for цвет in ((128, 0, 0), (255, 144, 60), (0, 0, 255), (0, 144, 255)):
+        arr = np.full((40, 40, 3), 255, np.uint8)
+        arr[10:30, 10:30] = цвет
+        assert is_markup_number(arr, BBox(5, 5, 35, 35)), цвет
+
+
+def test_pixels_ink_keeps_bright_colors():
+    """
+    Порог «чернил» — по минимальному каналу.
+
+    У оранжевой (255, 144, 60) и ярко-красной (255, 0, 0) подписи максимум
+    равен 255: проверка по максимуму выбрасывала их целиком, и решение
+    принимал тёмный дизер вокруг.
+    """
+    from repair.map_labels import pixels_ink
+
+    пиксели = np.array([[255, 144, 60], [255, 0, 0], [128, 0, 0], [0, 0, 0],
+                        [255, 255, 255], [255, 255, 219]])
+    assert list(pixels_ink(пиксели)) == [True, True, True, True, False, False]
