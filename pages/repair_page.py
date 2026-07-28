@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QPushButton, QFileDialog, QListWidget, QListWidgetItem,
     QTableWidget, QTableWidgetItem, QTabWidget, QHeaderView, QAbstractItemView,
     QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QTextEdit, QCheckBox,
+    QApplication,
 )
 
 from widgets import dot_icon, SegmentBar, DateCellDelegate
@@ -145,6 +146,9 @@ class RepairPage(QWidget):
         self._map_shown = None         # (номер, значение, лист, подпись) на экране
         self._map_cycle: dict = {}     # номер → какое из мест показано
         self._map_dirty = False        # есть ли несохранённые правки
+        # Снятие отметки ремонта: [{"path", "arr", "ann", "sheet"}]. Список
+        # пуст, пока галочка не поставлена, — ничего не считается заранее.
+        self._clean_plan: list[dict] = []
         # состояние превью документа (вкладка 1)
         self._doc_path: str | None = None
         self._doc_page_idx = 0
@@ -580,6 +584,26 @@ class RepairPage(QWidget):
         self.btn_map_undo.setEnabled(False)
         self.btn_map_undo.clicked.connect(self._map_undo)
         side.addWidget(self.btn_map_undo)
+
+        # Отметка ремонта: ОТН обводит заменяемый участок жирной красной
+        # полосой. После ремонта она в отчёте уже неверна — участок заменён,
+        # номиналы исправлены, а красное по-прежнему говорит про износ.
+        self.chk_map_clean = QCheckBox("Убрать отметку ремонта со схемы")
+        self.chk_map_clean.setToolTip(
+            "Красная полоса «Коррозионный износ», которой ОТН отметил "
+            "заменяемый участок, вместе с выноской и надписью.\n"
+            "Стирается и с рабочей карты, и с исходника ОТН: в отчёт идут оба.\n"
+            "Линии схемы, подписи сечений и примечания в штампе не трогаются.\n"
+            "Ничего не записывается до нажатия «Сохранить карту».")
+        self.chk_map_clean.toggled.connect(self._on_clean_toggled)
+        side.addWidget(self.chk_map_clean)
+        self.lbl_map_clean = QLabel("")
+        self.lbl_map_clean.setObjectName("hint")
+        self.lbl_map_clean.setWordWrap(True)
+        self.lbl_map_clean.setMaximumWidth(260)
+        self.lbl_map_clean.setVisible(False)
+        side.addWidget(self.lbl_map_clean)
+
         self.btn_map_save = QPushButton("Сохранить карту (с бэкапом)")
         self.btn_map_save.setObjectName("green_button")
         self.btn_map_save.setCursor(Qt.PointingHandCursor)
@@ -1724,6 +1748,12 @@ class RepairPage(QWidget):
         self._map_cycle = {}
         self._map_shown = None
         self._map_dirty = False
+        # Листы перечитаны с диска — прежний план стирания к ним не относится.
+        self._clean_plan = []
+        self.chk_map_clean.blockSignals(True)
+        self.chk_map_clean.setChecked(False)
+        self.chk_map_clean.blockSignals(False)
+        self.lbl_map_clean.setVisible(False)
         self.list_map_edits.clear()
         self._build_sheet_buttons()
         self._show_sheet(0, fit=True)
@@ -2158,8 +2188,117 @@ class RepairPage(QWidget):
         есть = self._total_edits() > 0
         self._map_dirty = есть
         self.btn_map_undo.setEnabled(есть)
-        self.btn_map_save.setEnabled(есть)
+        self._sync_map_save()
         self._log("Последняя правка карты отменена", "info")
+
+    # ── снятие отметки ремонта ───────────────────────────────────────
+
+    def _on_clean_toggled(self, on: bool):
+        """
+        Галочка «Убрать отметку ремонта»: посчитать, что будет стёрто.
+
+        Считаем и показываем, но НЕ пишем: запись — только по «Сохранить
+        карту», как и всё остальное на этой вкладке (П-2).
+        """
+        self._clean_plan = []
+        self.lbl_map_clean.setVisible(on)
+        if not on:
+            self.lbl_map_clean.setText("")
+            self._sync_map_save()
+            return
+        if not self._sheets:
+            self.lbl_map_clean.setText("Карта не загружена")
+            self._sync_map_save()
+            return
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            self._clean_plan = self._build_clean_plan()
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if not self._clean_plan:
+            self.lbl_map_clean.setText(
+                "Отметки ремонта на схеме нет — стирать нечего. "
+                "ОТН помечает карту не всегда.")
+            self._log("Отметки ремонта на схеме не найдено", "info")
+            self._sync_map_save()
+            return
+
+        всего = sum(p["ann"].pixels for p in self._clean_plan)
+        файлы = ", ".join(os.path.basename(p["path"]) for p in self._clean_plan)
+        надписей = sum(1 for p in self._clean_plan if p["ann"].caption is not None)
+        подпись = " (вместе с надписью)" if надписей else ""
+        px = f"{всего:,}".replace(",", " ")
+        self.lbl_map_clean.setText(
+            f"Найдена отметка ремонта{подпись}: {файлы}. "
+            f"Будет стёрто {px} px. Запись — по кнопке «Сохранить карту».")
+        self._log(f"Отметка ремонта найдена ({файлы}), к стиранию {всего} px",
+                  "info")
+        self._show_clean_preview(self._clean_plan[0])
+        self._sync_map_save()
+
+    def _build_clean_plan(self) -> list[dict]:
+        """
+        Где на схемах пункта стоит отметка ремонта.
+
+        Проверяются и рабочие листы, и исходники ОТН: в отчёт попадают оба
+        (в п.2687 `word/media/image6.png` и `image8.png` совпадают с ними
+        попиксельно), и отметка видна в обоих.
+        """
+        import numpy as np
+        from PIL import Image
+        from repair.annotation import find_annotation
+        from repair.map_sheets import original_map_file
+
+        план = []
+        for i, s in enumerate(self._sheets):
+            цели = [(s["path"], s["arr"], i)]
+            исходник = original_map_file(s["path"])
+            if os.path.isfile(исходник):
+                try:
+                    цели.append((исходник,
+                                 np.array(Image.open(исходник).convert("RGB")),
+                                 None))
+                except Exception as e:
+                    self._log(f"Исходник {os.path.basename(исходник)} "
+                              f"не прочитан: {e}", "warn")
+            for путь, arr, лист in цели:
+                try:
+                    ann = find_annotation(arr)
+                except Exception as e:
+                    self._log(f"{os.path.basename(путь)}: разбор отметки "
+                              f"не удался — {e}", "warn")
+                    continue
+                if ann is None:
+                    continue
+                план.append({"path": путь, "arr": arr, "ann": ann, "sheet": лист})
+        return план
+
+    def _show_clean_preview(self, запись: dict):
+        """Кроп «до / после» по найденной отметке — до всякой записи."""
+        ann = запись["ann"]
+        if ann.bbox is None:
+            return
+        from repair.annotation import erase_annotation
+
+        было = запись["arr"]
+        стало = было.copy()
+        erase_annotation(стало, ann)
+        self.lbl_map_before.setPixmap(self._crop_pixmap(было, ann.bbox))
+        self.lbl_map_after.setPixmap(self._crop_pixmap(стало, ann.bbox))
+        лист = запись["sheet"]
+        if лист is not None and лист != self._sheet_idx:
+            self._show_sheet(лист)
+        if лист is not None:
+            центр = ann.markers[0].center if ann.markers else (
+                (ann.bbox.x1 + ann.bbox.x2) // 2, (ann.bbox.y1 + ann.bbox.y2) // 2)
+            self.map_view.show_at(*центр, box=ann.bbox)
+
+    def _sync_map_save(self):
+        """Кнопку сохранения включает любое несохранённое изменение карты."""
+        есть = self._total_edits() > 0 or bool(self._clean_plan)
+        self.btn_map_save.setEnabled(есть)
 
     def _map_save(self):
         """
@@ -2167,28 +2306,66 @@ class RepairPage(QWidget):
 
         Замена одного акта нередко ложится на два листа, и разносить это на
         два сохранения значило бы плодить бэкапы одного и того же события.
+        Снятие отметки ремонта идёт тем же заходом и по тем же правилам.
         """
         изменённые = [s for s in self._sheets if s["edits"]]
-        if not изменённые:
+        if not изменённые and not self._clean_plan:
             return
         from PIL import Image
         from repair.safety import make_backup, append_journal
+        from repair.annotation import erase_annotation
 
         folder = self._point_folder()
-        b = make_backup(folder, [s["path"] for s in изменённые])
+        # Бэкап один на всё: и правленые листы, и файлы, с которых снимается
+        # отметка (среди них исходник ОТН, который иначе никогда не меняется).
+        файлы = [s["path"] for s in изменённые]
+        файлы += [p["path"] for p in self._clean_plan if p["path"] not in файлы]
+        b = make_backup(folder, файлы)
+
         строки = []
+        # 1. Стираем отметки — до сохранения, чтобы лист записался один раз.
+        for p in self._clean_plan:
+            стёрто = erase_annotation(p["arr"], p["ann"])
+            подпись = " с надписью" if p["ann"].caption is not None else ""
+            строки.append(f"{os.path.basename(p['path'])}: снята отметка "
+                          f"ремонта{подпись}, {стёрто} px")
+        # 2. Пишем на диск всё, что изменилось. Через словарь по пути: лист мог
+        #    попасть и в правки, и в снятие отметки — сохранить его надо один раз.
+        записать: dict = {}
         for s in изменённые:
-            Image.fromarray(s["arr"]).save(s["path"])
+            записать[s["path"]] = s["arr"]
             строки.append(f"лист {s['num']} ({os.path.basename(s['path'])}): "
                           f"правок {len(s['edits'])}")
-        всего = self._total_edits()
+        for p in self._clean_plan:
+            записать[p["path"]] = p["arr"]
+        for путь, arr in записать.items():
+            Image.fromarray(arr).save(путь)
+
         append_journal(folder, "Правка коррозионной карты",
                        строки + [f"бэкап: {b}"])
-        листов = f" на {len(изменённые)} листах" if len(изменённые) > 1 else ""
-        self._log(f"Карта сохранена ({всего} правок{листов}), "
+        всего = self._total_edits()
+        части = []
+        if всего:
+            листов = f" на {len(изменённые)} листах" if len(изменённые) > 1 else ""
+            части.append(f"{всего} правок{листов}")
+        if self._clean_plan:
+            части.append(f"отметка ремонта снята с {len(self._clean_plan)} файлов"
+                         if len(self._clean_plan) > 1 else "отметка ремонта снята")
+        self._log(f"Карта сохранена ({', '.join(части)}), "
                   f"бэкап и журнал созданы", "done")
+
         for s in изменённые:
             s["edits"] = []
+        if self._clean_plan:
+            # Показать результат на экране и снять галочку: стирать больше нечего.
+            for p in self._clean_plan:
+                if p["sheet"] is not None:
+                    self._show_sheet(p["sheet"])
+            self._clean_plan = []
+            self.chk_map_clean.blockSignals(True)
+            self.chk_map_clean.setChecked(False)
+            self.chk_map_clean.blockSignals(False)
+            self.lbl_map_clean.setVisible(False)
         self._map_dirty = False
         self.list_map_edits.clear()
         self.btn_map_undo.setEnabled(False)
