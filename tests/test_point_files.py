@@ -60,3 +60,29 @@ def test_report_prefers_non_print_copy(tmp_path):
     _touch(tmp_path, "ЗЭПБ № ТТП-2692.26 - ттп № 108.docx",
            "ЗЭПБ № ТТП-2692.26 - ттп № 108 ПЕЧАТЬ.docx")
     assert "печать" not in find_point_report(str(tmp_path)).lower()
+
+
+# ─── Шаблон отчёта для этапа 5 ────────────────────────────────────────
+
+def test_template_found_when_present(tmp_path):
+    from workers.stage4_worker import find_template_docx
+    _touch(tmp_path, "ПНОС_ТТП.docx", "ПНОС_ТТП.xlsm")
+    assert find_template_docx(str(tmp_path)).endswith("ПНОС_ТТП.docx")
+
+
+def test_finished_report_is_not_a_template(tmp_path):
+    """
+    После первого прогона отчёт идёт по алфавиту раньше шаблона («ЗЭПБ…»
+    перед «ПНОС_ТТП»). Прежний поиск «первый .docx» подставлял его: слияние
+    шло поверх готового отчёта, макрос падал с «Не удалось установить связь
+    с документом ПНОС_ТТП.docx», и появлялся мусорный второй отчёт.
+    """
+    from workers.stage4_worker import find_template_docx
+    _touch(tmp_path, "ЗЭПБ № ТТП-2616.26 - ттп № 29.docx")
+    assert find_template_docx(str(tmp_path)) is None
+
+
+def test_template_wins_over_report(tmp_path):
+    from workers.stage4_worker import find_template_docx
+    _touch(tmp_path, "ЗЭПБ № ТТП-2616.26 - ттп № 29.docx", "ПНОС_ТТП.docx")
+    assert find_template_docx(str(tmp_path)).endswith("ПНОС_ТТП.docx")

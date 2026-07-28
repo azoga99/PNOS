@@ -1077,9 +1077,13 @@ class RepairPage(QWidget):
             # не нужно, а замер рядом с ним и есть ключ к номеру сечения.
             крупно = self._act_marker_view()
             if крупно is not None:
-                arr, путь, стр = крупно
-                подпись = (f"Схема: выделенный участок — "
-                           f"{os.path.basename(путь)}, лист {стр}")
+                arr, путь, стр, сколько = крупно
+                # Числом отметок не хвастаемся: одна дуга распадается на
+                # несколько пятен, и «мест: 6» при трёх настоящих врало бы.
+                хвост = ("выделенные участки" if сколько > 1
+                         else "выделенный участок")
+                подпись = (f"Схема, {хвост} — {os.path.basename(путь)}, "
+                           f"лист {стр}")
             else:
                 from repair.pdf_preview import page_count, render_zone
                 путь = файлы[0]
@@ -1225,7 +1229,7 @@ class RepairPage(QWidget):
         """Выделение на исходнике ОТН: координаты переносятся 1:1."""
         import numpy as np
         from PIL import Image
-        from repair.highlight import find_marker, labels_near
+        from repair.highlight import find_markers, labels_near
         from repair.map_sheets import original_map_file
 
         найдено = set()
@@ -1235,30 +1239,34 @@ class RepairPage(QWidget):
                 continue
             try:
                 arr = np.array(Image.open(исходник).convert("RGB"))
-                m = find_marker(arr)
+                метки = find_markers(arr)
             except Exception as e:
                 self._log(f"Исходник {os.path.basename(исходник)} не прочитан: {e}",
                           "warn")
                 continue
-            if m is None:
-                continue
-            рядом = labels_near(s["labels"], m.center, self.MARKER_RADIUS)
-            найдено |= {l.number for l in рядом}
-            self._log(f"На исходнике {os.path.basename(исходник)} выделен "
-                      f"участок; рядом сечения: "
-                      f"{', '.join(str(l.number) for l in рядом) or '—'}", "info")
+            # Выделений бывает несколько: заменяют не один кусок, а участок.
+            for m in метки:
+                рядом = labels_near(s["labels"], m.center, self.MARKER_RADIUS)
+                найдено |= {l.number for l in рядом}
+                self._log(f"На исходнике {os.path.basename(исходник)} выделен "
+                          f"участок; рядом сечения: "
+                          f"{', '.join(str(l.number) for l in рядом) or '—'}",
+                          "info")
         return найдено
 
     def _act_marker_view(self):
         """
-        Найти выделенный участок на схеме акта и вернуть его крупным планом.
+        Найти выделенные участки на схеме акта и вернуть их крупным планом.
 
-        Возвращает (массив, путь, страница) или None. Программа схему не
-        толкует — показывает: замер у выделения читается глазами за секунду,
-        а OCR на нём ошибается (п.2763: 6.9 прочиталось как «9.6», настоящее
-        2.6 пропущено).
+        Возвращает (массив, путь, страница, сколько выделений) или None.
+        Программа схему не толкует — показывает: замер у выделения читается
+        глазами за секунду, а OCR на нём ошибается (п.2763: 6.9 прочиталось
+        как «9.6», настоящее 2.6 пропущено).
+
+        Кроп берётся по всем выделениям сразу: у п.2688 их три, и показать
+        одно значило бы спрятать два остальных.
         """
-        from repair.highlight import find_marker
+        from repair.highlight import find_markers, union_bbox
         from repair.pdf_preview import page_count, render_page
 
         docs = self._scan.get("docs")
@@ -1270,15 +1278,17 @@ class RepairPage(QWidget):
             for стр in range(страниц):
                 try:
                     arr = render_page(путь, стр, scale=self.ACT_RENDER_SCALE)
-                    m = find_marker(arr)
+                    метки = find_markers(arr)
                 except Exception:
                     continue
-                if m is None:
+                if not метки:
                     continue
+                общая = union_bbox(метки)
                 R = self.SCHEME_ZOOM_RADIUS
-                y1, y2 = max(0, m.center[1] - R), min(arr.shape[0], m.center[1] + R)
-                x1, x2 = max(0, m.center[0] - R), min(arr.shape[1], m.center[0] + R)
-                return arr[y1:y2, x1:x2], путь, стр + 1
+                h, w = arr.shape[:2]
+                y1, y2 = max(0, общая.y1 - R), min(h, общая.y2 + R)
+                x1, x2 = max(0, общая.x1 - R), min(w, общая.x2 + R)
+                return arr[y1:y2, x1:x2], путь, стр + 1, len(метки)
         return None
 
     @staticmethod

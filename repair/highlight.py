@@ -86,17 +86,16 @@ def thick_mask(mask: np.ndarray, k: int) -> np.ndarray:
     return out
 
 
-def _largest_component(ys: np.ndarray, xs: np.ndarray,
-                       gap: int = 8) -> list[int]:
+def _components(ys: np.ndarray, xs: np.ndarray, gap: int = 8) -> list[list[int]]:
     """
-    Наибольшая группа связных точек (соседи — в пределах `gap` пикселей).
+    Группы связных точек (соседи — в пределах `gap` пикселей), крупные первыми.
 
     Точек после эрозии остаются сотни, поэтому обходим их напрямую, без
     разметки всего изображения.
     """
     точки = list(zip(ys.tolist(), xs.tolist()))
     не_посещены = set(range(len(точки)))
-    лучшая: list[int] = []
+    группы: list[list[int]] = []
     while не_посещены:
         старт = не_посещены.pop()
         группа = [старт]
@@ -110,42 +109,56 @@ def _largest_component(ys: np.ndarray, xs: np.ndarray,
                 не_посещены.discard(j)
                 группа.append(j)
                 стек.append(j)
-        if len(группа) > len(лучшая):
-            лучшая = группа
-    return лучшая
+        группы.append(группа)
+    группы.sort(key=len, reverse=True)
+    return группы
 
 
-def find_marker(arr: np.ndarray, min_px: int = MIN_MARKER_PX) -> Marker | None:
+def find_markers(arr: np.ndarray, min_px: int = MIN_MARKER_PX) -> list[Marker]:
     """
-    Найти выделение на изображении схемы. None — выделения нет.
+    Все выделения на изображении схемы, крупные первыми.
 
-    Возвращается самая крупная группа: на схеме бывает одно выделение, но
-    рамка чертежа местами тоже даёт толстые красные пиксели, и брать надо
-    наибольшее пятно, а не всё подряд.
+    Их бывает несколько: акт 222-1-91 (п.2688) требует заменить 4 погонных
+    метра трубы, и на схеме отмечены три разных места. Брать только самое
+    крупное значило бы потерять остальные.
     """
-    if arr is None or arr.ndim != 3:
-        return None
+    if arr is None or getattr(arr, "ndim", 0) != 3:
+        return []
     k = erosion_radius(arr.shape)
     толстое = thick_mask(red_mask(arr), k)
     ys, xs = np.nonzero(толстое)
     if len(xs) < min_px:
-        return None
-
-    группа = _largest_component(ys, xs)
-    if len(группа) < min_px:
-        return None
-    gy = ys[группа]
-    gx = xs[группа]
-    bbox = BBox(int(gx.min()), int(gy.min()),
-                int(gx.max()) + 1, int(gy.max()) + 1)
-    if max(bbox.width(), bbox.height()) < MIN_MARKER_EXTENT * k:
-        return None                     # толстая точка, а не полоса вдоль трубы
+        return []
 
     h, w = arr.shape[:2]
-    cx, cy = int(gx.mean()), int(gy.mean())
-    m = Marker(bbox=bbox, center=(cx, cy), pixels=len(группа))
-    m._rel = (cx / w, cy / h)
-    return m
+    out: list[Marker] = []
+    for группа in _components(ys, xs):
+        if len(группа) < min_px:
+            break                       # дальше только мельче
+        gy, gx = ys[группа], xs[группа]
+        bbox = BBox(int(gx.min()), int(gy.min()),
+                    int(gx.max()) + 1, int(gy.max()) + 1)
+        if max(bbox.width(), bbox.height()) < MIN_MARKER_EXTENT * k:
+            continue                    # толстая точка, а не полоса вдоль трубы
+        cx, cy = int(gx.mean()), int(gy.mean())
+        m = Marker(bbox=bbox, center=(cx, cy), pixels=len(группа))
+        m._rel = (cx / w, cy / h)
+        out.append(m)
+    return out
+
+
+def find_marker(arr: np.ndarray, min_px: int = MIN_MARKER_PX) -> Marker | None:
+    """Самое крупное выделение или None — короткая форма `find_markers`."""
+    найдено = find_markers(arr, min_px)
+    return найдено[0] if найдено else None
+
+
+def union_bbox(markers) -> BBox | None:
+    """Рамка, охватывающая все выделения — чтобы показать их разом."""
+    if not markers:
+        return None
+    return BBox(min(m.bbox.x1 for m in markers), min(m.bbox.y1 for m in markers),
+                max(m.bbox.x2 for m in markers), max(m.bbox.y2 for m in markers))
 
 
 def labels_near(labels, point: tuple[int, int], radius: int) -> list:

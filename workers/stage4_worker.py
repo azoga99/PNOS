@@ -113,6 +113,23 @@ class WordDialogKiller:
         return True
 
 
+#: Шаблон отчёта, который этап 5 открывает в Word. Имя жёсткое: макрос
+#: TransTab ищет открытый документ именно под ним (`GetObject` по имени).
+TEMPLATE_DOCX = "ПНОС_ТТП.docx"
+
+
+def find_template_docx(folder: str) -> str | None:
+    """
+    Шаблон отчёта в папке пункта — строго по имени, а не «первый .docx».
+
+    После первого прогона в папке лежит готовый отчёт, и по алфавиту он идёт
+    раньше шаблона («ЗЭПБ…» перед «ПНОС_ТТП»). Прежний поиск подставлял его,
+    слияние выполнялось поверх готового отчёта, а макрос падал.
+    """
+    p = os.path.join(folder, TEMPLATE_DOCX)
+    return p if os.path.isfile(p) else None
+
+
 def find_file(folder: str, exts: tuple) -> str | None:
     """Ищет первый попавшийся файл с заданным расширением в папке."""
     if not folder or not os.path.exists(folder):
@@ -673,9 +690,24 @@ class Stage4Worker(QThread):
 
                 try:
                     excel_path = find_file(p_folder, (".xls", ".xlsx", ".xlsm"))
-                    word_path = find_file(p_folder, (".doc", ".docx"))
-                    
-                    if not excel_path or not word_path:
+                    word_path = find_template_docx(p_folder)
+
+                    if word_path is None:
+                        # Шаблон забирает первый по алфавиту .docx, а после
+                        # первого прогона первым идёт готовый отчёт («ЗЭПБ…»
+                        # раньше «ПНОС_ТТП»). Тогда слияние шло в сам отчёт, а
+                        # макрос TransTab падал с «Не удалось установить связь
+                        # с документом ПНОС_ТТП.docx» — и появлялся мусорный
+                        # второй отчёт. Лучше честно остановиться.
+                        self.log.emit(
+                            f"   ✗ Шаблон {TEMPLATE_DOCX} в папке пункта не "
+                            f"найден. Этап 5 повторно не запускается: верните "
+                            f"шаблон в папку или обработайте пункт заново с шага 1.")
+                        point_report["Результат"] = f"❌ Нет {TEMPLATE_DOCX}"
+                        errors_count += 1
+                        continue
+
+                    if not excel_path:
                         self.log.emit(f"   ✗ Файлы не найдены.")
                         point_report["Результат"] = "❌ Файлы не найдены"
                         errors_count += 1
