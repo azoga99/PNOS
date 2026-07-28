@@ -1072,16 +1072,27 @@ class RepairPage(QWidget):
             self.btn_scheme.setChecked(False)
             return
         try:
-            from repair.pdf_preview import page_count, render_zone
-            путь = файлы[0]
-            # Схема — на последнем листе акта, над таблицей замены.
-            стр = page_count(путь)
-            arr = render_zone(путь, стр - 1, 0.0, 0.75, scale=2.0)
+            # Если на схеме есть красное выделение — показываем сразу его
+            # крупным планом: искать заменяемый участок глазами по всему листу
+            # не нужно, а замер рядом с ним и есть ключ к номеру сечения.
+            крупно = self._act_marker_view()
+            if крупно is not None:
+                arr, путь, стр = крупно
+                подпись = (f"Схема: выделенный участок — "
+                           f"{os.path.basename(путь)}, лист {стр}")
+            else:
+                from repair.pdf_preview import page_count, render_zone
+                путь = файлы[0]
+                # Схема — на последнем листе акта, над таблицей замены.
+                стр = page_count(путь)
+                arr = render_zone(путь, стр - 1, 0.0, 0.75, scale=2.0)
+                подпись = (f"Схема дефектного участка: "
+                           f"{os.path.basename(путь)}, лист {стр} "
+                           f"(выделение не найдено — смотрите весь лист)")
             self.scheme_view._fitted = False
             self.scheme_view.set_image(self._np_to_qimage(arr))
             self.scheme_view.setVisible(True)
-            self._log(f"Схема дефектного участка: {os.path.basename(путь)}, "
-                      f"лист {стр}", "info")
+            self._log(подпись, "info")
         except Exception as e:
             self._log(f"Схему показать не удалось: {e}", "warn")
             self.btn_scheme.setChecked(False)
@@ -1134,9 +1145,17 @@ class RepairPage(QWidget):
             if it is not None:
                 по_строке[it.data(Qt.UserRole)] = r
 
+        # Выделенный красным участок на схеме — третий, независимый признак.
+        по_схеме = self._marker_sections()
+
         всего = подставлено = 0
         for s in suggest_sections(строки, сечения):
             self._log(describe(s), "done" if s.кандидаты else "warn")
+            # Пересечение «что сказано в акте» и «что выделено на схеме» —
+            # самый надёжный ответ: на п.2687 рядом с выделением три сечения,
+            # и только одно из них отвод, как в таблице замены.
+            точные = [c for c in s.кандидаты if c.number in по_схеме] or \
+                     self._marker_match(s, по_схеме, сечения)
             for c in s.кандидаты:
                 r = по_строке.get(c.row)
                 if r is None:
@@ -1153,9 +1172,132 @@ class RepairPage(QWidget):
                     self._set_new_values(r, s.номинал, s.диаметр,
                                          measure_from_thickness(s.номинал))
                     подставлено += 1
+
+            if len(точные) == 1:
+                c = точные[0]
+                r = по_строке.get(c.row)
+                if r is not None:
+                    it = self.tbl_sections.item(r, COL_NUM)
+                    it.setIcon(dot_icon(_DOT["done"]))
+                    it.setToolTip(f"{s.строка} → выделено на схеме")
+                    self._log(
+                        f"На схеме выделен участок: {s.элемент} → сечение "
+                        f"{c.number} (было {c.diameter}×{c.thickness_nom}, "
+                        f"замер {c.tmin})", "done")
+                    if not any(self._cell(r, cc) for cc in NEW_COLS):
+                        self._set_new_values(r, s.номинал, s.диаметр,
+                                             measure_from_thickness(s.номинал))
+                        подставлено += 1
         self._log(f"Подбор: помечено сечений {всего}, номинал подставлен "
                   f"в {подставлено}", "info")
         self._refresh_map_plan()
+
+    # ── выделенный красным участок на схеме ──────────────────────────
+
+    #: Радиус вокруг выделения, в котором ищутся подписи сечений. Подписи стоят
+    #: не на трубе, а сбоку на выносках, поэтому ближайшая не обязательно та —
+    #: берём круг и сужаем типом элемента из акта.
+    MARKER_RADIUS = 260
+
+    #: Масштаб рендера страницы акта при поиске выделения. Схема на листе
+    #: нарисована мелко: при 3.0 полоса у половины актов не доживает до порога
+    #: толщины, при 5.0 находится у всех пяти проверенных.
+    ACT_RENDER_SCALE = 5.0
+
+    #: Сколько пикселей вокруг выделения показывать в «Схеме из акта».
+    SCHEME_ZOOM_RADIUS = 700
+
+    def _marker_sections(self) -> set:
+        """
+        Номера сечений рядом с красным выделением на схеме.
+
+        Источник только один — исходник ОТН из «Первички»: он попиксельно
+        совпадает с рабочей картой, поэтому координаты переносятся без всякой
+        подгонки. Схема внутри акта — другой чертёж, и связать её с картой
+        можно лишь через подписанные рядом замеры; проверка на п.2763 показала,
+        что OCR читает их неверно (6.9 → «9.6», настоящее 2.6 пропущено) и
+        выдаёт чужое сечение. Поэтому схему акта программа не толкует, а
+        показывает сотруднику — см. «Схема из акта».
+        """
+        return self._marker_from_original()
+
+    def _marker_from_original(self) -> set:
+        """Выделение на исходнике ОТН: координаты переносятся 1:1."""
+        import numpy as np
+        from PIL import Image
+        from repair.highlight import find_marker, labels_near
+        from repair.map_sheets import original_map_file
+
+        найдено = set()
+        for s in self._sheets:
+            исходник = original_map_file(s["path"])
+            if not os.path.isfile(исходник) or not s["labels"]:
+                continue
+            try:
+                arr = np.array(Image.open(исходник).convert("RGB"))
+                m = find_marker(arr)
+            except Exception as e:
+                self._log(f"Исходник {os.path.basename(исходник)} не прочитан: {e}",
+                          "warn")
+                continue
+            if m is None:
+                continue
+            рядом = labels_near(s["labels"], m.center, self.MARKER_RADIUS)
+            найдено |= {l.number for l in рядом}
+            self._log(f"На исходнике {os.path.basename(исходник)} выделен "
+                      f"участок; рядом сечения: "
+                      f"{', '.join(str(l.number) for l in рядом) or '—'}", "info")
+        return найдено
+
+    def _act_marker_view(self):
+        """
+        Найти выделенный участок на схеме акта и вернуть его крупным планом.
+
+        Возвращает (массив, путь, страница) или None. Программа схему не
+        толкует — показывает: замер у выделения читается глазами за секунду,
+        а OCR на нём ошибается (п.2763: 6.9 прочиталось как «9.6», настоящее
+        2.6 пропущено).
+        """
+        from repair.highlight import find_marker
+        from repair.pdf_preview import page_count, render_page
+
+        docs = self._scan.get("docs")
+        for путь in list(getattr(docs, "act_files", []) or []):
+            try:
+                страниц = page_count(путь)
+            except Exception:
+                continue
+            for стр in range(страниц):
+                try:
+                    arr = render_page(путь, стр, scale=self.ACT_RENDER_SCALE)
+                    m = find_marker(arr)
+                except Exception:
+                    continue
+                if m is None:
+                    continue
+                R = self.SCHEME_ZOOM_RADIUS
+                y1, y2 = max(0, m.center[1] - R), min(arr.shape[0], m.center[1] + R)
+                x1, x2 = max(0, m.center[0] - R), min(arr.shape[1], m.center[0] + R)
+                return arr[y1:y2, x1:x2], путь, стр + 1
+        return None
+
+    @staticmethod
+    def _marker_match(s, по_схеме: set, сечения) -> list:
+        """
+        Сечения из круга выделения, подходящие по типу элемента из акта.
+
+        Нужно, когда подбор по типоразмеру нашёл не то: у п.2687 акт ставит
+        отвод Ø57 вместо Ø45, поиск по диаметру выдал два чужих отвода, а
+        рядом с выделением лежат сечения 28 (труба), 29 (отвод) и 31 (переход)
+        — по типу подходит ровно одно.
+        """
+        from repair.suggest import _similar, ELEMENT_MIN
+
+        if not по_схеме or not s.элемент:
+            return []
+        return [sec for sec in сечения
+                if sec.number in по_схеме
+                and _similar(s.элемент, sec.element) >= ELEMENT_MIN]
 
     def _set_new_values(self, row: int, тисп: str, диаметр: str, замер: str):
         """Записать три поля правки разом, не дёргая автоподстановку замера."""

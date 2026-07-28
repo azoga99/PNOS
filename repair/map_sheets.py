@@ -67,6 +67,26 @@ def working_map_files(names) -> list[str]:
     return sorted(рабочие, key=lambda n: (sheet_number(n), os.path.basename(n)))
 
 
+def original_map_file(filename: str) -> str:
+    """
+    Имя исходника ОТН для рабочего листа: «2763.png» → «2763..png»,
+    «2704_1.png» → «2704._1.png».
+
+    Точка ставится перед суффиксом листа, а не в конец имени. Исходник нужен
+    не для правки (её он не допускает), а для чтения: инженер ОТН иногда
+    выделяет на нём заменяемый участок красным, и это прямая подсказка.
+    """
+    папка, имя = os.path.split(filename or "")
+    stem, ext = os.path.splitext(имя)
+    m = _SHEET_RE.search(stem)
+    if m:
+        основа = stem[:m.start()]
+        новое = f"{основа}.{m.group(0)}{ext}"
+    else:
+        новое = f"{stem}.{ext}"
+    return os.path.join(папка, новое) if папка else новое
+
+
 def likely_sheet(number: int, by_sheet: dict, span: int = 2) -> int | None:
     """
     Подсказка, на каком листе сечение, когда номер нашёлся на нескольких.

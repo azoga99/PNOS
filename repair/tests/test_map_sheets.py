@@ -6,8 +6,11 @@
 п.2808 — три, п.2758 — один лист с именем, не совпадающим с номером пункта.
 """
 
+import os
+
 from repair.map_sheets import (
     is_working_map, sheet_number, working_map_files, likely_sheet,
+    original_map_file,
 )
 
 
@@ -109,3 +112,27 @@ def test_hint_ignores_the_number_itself():
     """Сам номер соседом не считается — иначе подсказка была бы всегда."""
     by_sheet = {0: {7}, 1: {7}}
     assert likely_sheet(7, by_sheet) is None
+
+
+# ─── Имя исходника ОТН ────────────────────────────────────────────────
+
+def test_original_name_single_sheet():
+    """Точка ставится перед расширением: «2763.png» → «2763..png»."""
+    assert original_map_file("2763.png") == "2763..png"
+
+
+def test_original_name_multi_sheet():
+    """У листа точка встаёт перед суффиксом, а не в конец имени."""
+    assert original_map_file("2704_1.png") == "2704._1.png"
+    assert original_map_file("2808_3.png") == "2808._3.png"
+
+
+def test_original_name_keeps_folder():
+    из = os.path.join("C:\\", "п.2704", "Первичка", "2704_2.png")
+    assert original_map_file(из).endswith(os.path.join("Первичка", "2704._2.png"))
+
+
+def test_original_is_not_a_working_map():
+    """Круг замкнулся: имя исходника рабочей картой не считается."""
+    for имя in ("2763.png", "2704_1.png", "2808_3.png"):
+        assert not is_working_map(original_map_file(имя))
