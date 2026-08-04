@@ -982,6 +982,16 @@ class MainWindow(QMainWindow):
             note="Начните с «транспортировки», далее — конкретное вещество "
                  "(напр. «транспортировки рафината растворителя»)."))
 
+        f["commission"] = QLineEdit()
+        f["commission"].setValidator(QIntValidator(1000, 2100, self))
+        f["commission"].setMaxLength(4)
+        f["commission"].setPlaceholderText("гггг")
+        f["commission"].setMaximumWidth(120)
+        form.addWidget(self._form_field(
+            "Год ввода в эксплуатацию (B19)", f["commission"], required=False,
+            note="Подставляется из паспорта; если там года нет — впишите сам. "
+                 "Этот год печатается в отчёте: «введен в эксплуатацию с … г»."))
+
         import user_data
         f["specialist"] = QComboBox()
         f["specialist"].addItem("— выберите —", "")
@@ -1368,6 +1378,13 @@ class MainWindow(QMainWindow):
             prefix = CONFIG["MANUAL_FORM"].get("PURPOSE_PREFIX", "транспортировки ")
             f = self.manual_fields
             f["purpose"].setText(values.get("purpose") or prefix)
+            # Года в черновике ещё нет — подставляем из паспорта (ключ отсутствует).
+            # Пустая строка в черновике означает, что поле очистили руками, и
+            # подставлять заново нельзя.
+            year = values.get("commission_year")
+            if year is None:
+                year = self._passport_commission_year(folder)
+            f["commission"].setText(year or "")
             self._set_combo(f["specialist"], values.get("specialist", ""))
             self._set_date_edit(f["date"], values.get("date", ""))
             self._set_combo(f["org"], values.get("epb_org", ""))
@@ -1386,6 +1403,7 @@ class MainWindow(QMainWindow):
             f = self.manual_fields
             prefix = CONFIG["MANUAL_FORM"].get("PURPOSE_PREFIX", "транспортировки ")
             f["purpose"].setText(prefix)
+            f["commission"].setText("")
             f["specialist"].setCurrentIndex(0)
             self._set_date_edit(f["date"], "")
             f["org"].setCurrentIndex(0)
@@ -1396,6 +1414,25 @@ class MainWindow(QMainWindow):
         finally:
             self._manual_loading = False
 
+    def _passport_commission_year(self, folder: str) -> str:
+        """Год ввода в эксплуатацию из паспорта пункта (DocVariable F051).
+
+        Читается zip-ом из .docx — без Word и COM, поэтому переключение пунктов
+        в списке не тормозит. Результат кэшируется на сессию: паспорт за время
+        работы не меняется.
+        """
+        cache = getattr(self, "_commission_cache", None)
+        if cache is None:
+            cache = self._commission_cache = {}
+        if folder not in cache:
+            try:
+                import passport_data
+                cache[folder] = passport_data.year_of(
+                    passport_data.commission_date(folder))
+            except Exception:
+                cache[folder] = ""
+        return cache[folder]
+
     def _set_combo(self, combo, value: str):
         idx = combo.findData(value)
         combo.setCurrentIndex(idx if idx >= 0 else 0)
@@ -1404,6 +1441,7 @@ class MainWindow(QMainWindow):
         f = self.manual_fields
         return {
             "purpose": f["purpose"].text().strip(),
+            "commission_year": f["commission"].text().strip(),
             "specialist": f["specialist"].currentData() or "",
             "date": self._date_edit_value(f["date"]),
             "epb_org": f["org"].currentData() or "",

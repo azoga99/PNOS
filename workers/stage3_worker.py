@@ -149,6 +149,34 @@ class Stage3Worker(QThread):
     def cancel(self):
         self._is_cancelled = True
 
+    def _apply_manual_commission_year(self, ws, p_folder: str):
+        """Ставит в паспорт!B19 год, введённый на шаге 3 (если его вводили).
+
+        День и месяц сохраняются: сначала из уже записанного значения ячейки
+        (оно только что пришло из F051), затем из паспорта. Отчёт берёт из B19
+        только год — данные!C12 = YEAR(паспорт!B19).
+        """
+        try:
+            from status_manager import get_status_value
+            import passport_data
+
+            draft = get_status_value(p_folder, "manual3_draft", None) or {}
+            year = str(draft.get("commission_year", "") or "").strip()
+            cell_addr = CONFIG["MANUAL_FORM"].get("COMMISSION_CELL")
+            if not year or not cell_addr:
+                return
+            date_text = passport_data.commission_value(
+                year, ws.Range(cell_addr).Value,
+                passport_data.commission_date(p_folder))
+            if not date_text:
+                return
+            rng = ws.Range(cell_addr)
+            rng.NumberFormat = "@"
+            rng.Value = date_text
+            self.log.emit(f"   [Год ввода] Из ручного контроля: {date_text}")
+        except Exception as e:
+            self.log.emit(f"   ⚠ Не удалось применить год ввода из шага 3: {e}")
+
     def _clean_pnos_copy(self, master_path: str):
         """Создает временную копию ПНОС без XML тегов definedNames."""
         tmp_dir = tempfile.mkdtemp(prefix="pnos_")
@@ -419,6 +447,13 @@ class Stage3Worker(QThread):
                         else:
                             self.log.emit(f"   [!] У Word-файла нет переменной «{var_name}»")
                     
+                    # Год ввода в эксплуатацию, заданный вручную на шаге 3,
+                    # имеет приоритет над F051: у части паспортов переменной нет
+                    # вовсе, и без этого в отчёт уходило бы «введен в
+                    # эксплуатацию с 1900 г». Пишем ПОСЛЕ DOCVARIABLE_MAP, иначе
+                    # значение из паспорта затрёт ручное.
+                    self._apply_manual_commission_year(ws, p_folder)
+
                     # Пишем количество страниц
                     page_count_cell = macro_cfg.get("WORD_PAGE_COUNT_CELL", "B48")
                     ws.Range(page_count_cell).Value = pages

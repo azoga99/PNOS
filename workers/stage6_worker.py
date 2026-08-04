@@ -11,11 +11,17 @@
      на страницу, начиная с метки [ГИ]. Ориентация приводится по EXIF-тегу
      (сканы часто хранятся с "лежащими" пикселями + тегом поворота — если
      не применить его явно, Word вставит картинку как есть, боком).
+     Если метки в отчёте нет, место вставки определяется по структуре
+     документа — см. `_restore_marker`.
   4. Полностью пересчитывает номера страниц на листе СОДЕРЖАНИЕ по фактическим
      страницам финального документа (это заодно чинит сдвиг от фото этапа 6).
 
-Если папки актов для числа нет — не ошибка: маркер удаляется, в отчёт пишется
-«нет актов ГИ для <число>», содержание всё равно пересчитывается.
+Если папки актов для числа нет — это не ошибка прогона, но и не «готово»:
+метка [ГИ] остаётся в отчёте нетронутой, содержание пересчитывается, а шаг 7
+для пункта НЕ отмечается выполненным. Акты нередко находятся уже после того,
+как пункт сделан целиком; когда их выложат на диск, достаточно снова запустить
+этап 7 — пункт подхватится сам, без «Сброса статуса» и без ручного возврата
+метки в документ.
 """
 
 import os
@@ -52,6 +58,11 @@ def gi_sort_key(path: str) -> int:
     stem = os.path.splitext(name)[0]
     m = re.search(r'(\d+)\s*$', stem)
     return int(m.group(1)) if m else 0
+
+
+def _norm(text: str) -> str:
+    """Текст Word без служебных символов: \\r, \\a (маркер ячейки), разрывы страниц."""
+    return " ".join((text or "").replace("\x07", " ").split())
 
 
 def _toc_key(text: str):
@@ -168,21 +179,126 @@ class Stage6Worker(QThread):
 
     # ─── Вставка актов в Word ────────────────────────────────────────
 
+    def _page_range_of(self, para):
+        """Диапазон страницы, на которой лежит абзац (Word-закладка \\page)."""
+        para.Range.Select()
+        return self.wd_app.Selection.Bookmarks("\\page").Range
+
+    def _page_is_blank(self, doc, page_range) -> bool:
+        """Страница пуста: ни текста, ни картинок (ни плавающих, ни встроенных)."""
+        if _norm(page_range.Text):
+            return False
+        try:
+            if page_range.InlineShapes.Count:
+                return False
+        except Exception:
+            pass
+        start, end = page_range.Start, page_range.End
+        for i in range(1, doc.Shapes.Count + 1):
+            try:
+                anchor = doc.Shapes(i).Anchor.Start
+            except Exception:
+                continue
+            if start <= anchor <= end:
+                return False
+        return True
+
+    def _restore_marker(self, doc) -> bool:
+        """Ставит метку [ГИ] на её законное место, если в отчёте её уже нет.
+
+        Метка живёт на пустой странице в самом конце ПРИЛОЖЕНИЯ Г — прямо перед
+        заголовком следующего приложения (GI_CONFIG.NEXT_HEADING). Проверено на
+        65 отчётах (шаблоны и сданные пункты): между последним разрывом секции и
+        этим заголовком лежит либо одна метка, либо уже вставленные акты. Значит
+        пустая страница перед заголовком — однозначное место вставки, а непустая
+        означает, что акты там уже стоят и класть их второй раз нельзя.
+        """
+        gi_cfg = CONFIG.get("GI_CONFIG", {})
+        marker = gi_cfg.get("MARKER", "[ГИ]")
+        heading = _norm(gi_cfg.get("NEXT_HEADING", "")).upper()
+        if not heading:
+            return False
+
+        # Ищем через Find (перебор всех абзацев по COM — это тысячи RPC-вызовов).
+        # Свойства задаются до Execute(): аргументы Execute() pywin32 молча теряет.
+        prev = None
+        rng = doc.Content
+        find = rng.Find
+        find.ClearFormatting()
+        find.Text = heading
+        find.Forward = True
+        find.Wrap = 0            # wdFindStop
+        find.MatchCase = False
+        find.MatchWildcards = False
+        for _ in range(50):      # страховка от зацикливания Find
+            if not find.Execute():
+                break
+            raw = rng.Paragraphs(1).Range.Text
+            if not _norm(raw).upper().startswith(heading):
+                continue         # заголовок упомянут внутри строки — не он
+            if re.search(r'\t\s*\d+\s*$', raw.rstrip('\r')):
+                continue         # это строка СОДЕРЖАНИЯ, а не заголовок в теле
+            prev = rng.Paragraphs(1).Previous()
+            break
+
+        if prev is None:
+            self.log.emit(f"   ⚠ Заголовок «{heading}» в отчёте не найден — "
+                          f"место для актов ГИ определить нечем.")
+            return False
+
+        try:
+            page_range = self._page_range_of(prev)
+        except Exception as e:
+            self.log.emit(f"   ⚠ Не удалось определить страницу перед «{heading}»: {e}")
+            return False
+
+        if not self._page_is_blank(doc, page_range):
+            self.log.emit(f"   ⚠ Страница перед «{heading}» не пуста — похоже, акты ГИ "
+                          f"уже вставлены. Повторная вставка не выполняется.")
+            return False
+
+        try:
+            rng = prev.Range
+            if rng.End > rng.Start:
+                rng.End = rng.End - 1  # не трогаем знак абзаца
+            rng.Text = marker
+        except Exception as e:
+            self.log.emit(f"   ⚠ Не удалось поставить метку {marker}: {e}")
+            return False
+        return True
+
     def _insert_gi(self, doc, images) -> int:
         """Вставляет акты по одному на страницу, начиная с метки [ГИ].
         Метод — дублирование страницы метки (как для [ФОТО]). Возвращает число вставленных.
         """
-        marker = CONFIG.get("GI_CONFIG", {}).get("MARKER", "[ГИ]")
+        gi_cfg = CONFIG.get("GI_CONFIG", {})
+        marker = gi_cfg.get("MARKER", "[ГИ]")
 
         find_range = doc.Content
         find_range.Find.Execute(FindText=marker)
-        if not find_range.Find.Found:
-            self.log.emit(f"   ⚠ Маркер {marker} не найден в отчёте.")
-            return 0
+        found = bool(find_range.Find.Found)
 
         if not images:
-            find_range.Text = ""  # актов нет — просто убираем метку
+            # Метку НЕ стираем. Акты часто выкладывают на диск уже после того, как
+            # пункт сделан целиком; если метку убрать, вставлять их будет некуда и
+            # сотруднику приходится возвращать её в документ руками.
+            if not found:
+                self.log.emit(f"   ⚠ Метки {marker} в отчёте нет (стёрта прошлым прогоном). "
+                              f"Когда акты появятся, место вставки определится по структуре отчёта.")
             return 0
+
+        if not found:
+            self.log.emit(f"   ⚠ Метка {marker} в отчёте не найдена — определяем место "
+                          f"вставки по структуре документа.")
+            if not self._restore_marker(doc):
+                return 0
+            find_range = doc.Content
+            find_range.Find.Execute(FindText=marker)
+            if not find_range.Find.Found:
+                self.log.emit(f"   ❌ Метку {marker} поставить не удалось.")
+                return 0
+            self.log.emit(f"   ✓ Место вставки найдено: пустая страница перед "
+                          f"«{gi_cfg.get('NEXT_HEADING', '')}».")
 
         # 1. Диапазон страницы, где стоит метка — эталон для дублирования
         try:
@@ -435,6 +551,10 @@ class Stage6Worker(QThread):
                     doc = self.wd_app.Documents.Open(report_file)
 
                     inserted = self._insert_gi(doc, images)
+                    # Без актов пункт не считается закрытым: метка остаётся в отчёте,
+                    # шаг 7 не отмечается — повторный запуск этапа подхватит пункт сам,
+                    # как только акты выложат на диск.
+                    gi_ok = True
                     if images:
                         total = len(images)
                         if inserted == total:
@@ -452,11 +572,14 @@ class Stage6Worker(QThread):
                             self.info.emit(f"Не удалось вставить акты ГИ для {gi_num}", "warn")
                             self.log.emit(f"   ❌ Акты ГИ найдены ({total} шт.), но вставить в документ не удалось.")
                     elif gi_num:
+                        gi_ok = False
                         row["Акты ГИ"] = f"нет папки для {gi_num}"
                         self.info.emit(f"Нет актов ГИ для {gi_num}", "warn")
                         self.log.emit(f"   ⚠ На диске нет папки актов для «{gi_num}».")
                     else:
+                        gi_ok = False
                         row["Акты ГИ"] = "участок не задан"
+                        self.info.emit(f"{p_name}: не определён номер участка (B12)", "warn")
                         self.log.emit("   ⚠ Не определён номер участка (B12).")
 
                     # Пересчёт содержания (всегда — фиксит и сдвиг от фото этапа 6)
@@ -467,9 +590,15 @@ class Stage6Worker(QThread):
                     doc.Close()
                     doc = None
 
-                    set_stage_status(p_folder, "stage6", True)
-                    row["Результат"] = "✅ Успешно"
-                    self.info.emit(f"{p_name} — готово", "done")
+                    if gi_ok:
+                        set_stage_status(p_folder, "stage6", True)
+                        row["Результат"] = "✅ Успешно"
+                        self.info.emit(f"{p_name} — готово", "done")
+                    else:
+                        row["Результат"] = "⚠ Без актов ГИ"
+                        self.log.emit("   ⏳ Шаг 7 не отмечен выполненным: метка "
+                                      "оставлена в отчёте. Выложите акты на диск и "
+                                      "запустите этап 7 ещё раз — пункт подхватится сам.")
                 except Exception as ex:
                     self.log.emit(f"   ❌ Ошибка Word: {ex}")
                     row["Результат"] = "❌ Ошибка Word"

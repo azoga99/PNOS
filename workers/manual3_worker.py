@@ -36,8 +36,8 @@ class Manual3Worker(QThread):
         """
         entries — список словарей вида:
             {"folder": <путь к папке пункта>, "num": "2758", "values": {...}}
-        values содержит ключи: purpose, specialist, date, epb_done,
-                               epb_org, reg_num, epb_date, sheets
+        values содержит ключи: purpose, commission_year, specialist, date,
+                               epb_done, epb_org, reg_num, epb_date, sheets
         """
         super().__init__(parent)
         self.entries = entries or []
@@ -106,7 +106,7 @@ class Manual3Worker(QThread):
                         IgnoreReadOnlyRecommended=True, Notify=False)
                     ws = work_wb.Sheets(sheet_name)
 
-                    self._write_values(ws, cfg, values)
+                    self._write_values(ws, cfg, values, folder)
 
                     work_wb.Save()
                     safe_close_com(work_wb, save=False)
@@ -154,7 +154,7 @@ class Manual3Worker(QThread):
             dk.stop()
             pythoncom.CoUninitialize()
 
-    def _write_values(self, ws, cfg, values: dict):
+    def _write_values(self, ws, cfg, values: dict, folder: str = ""):
         """Записывает значения формы в ячейки листа «паспорт»."""
         def put_text(cell_addr, text):
             rng = ws.Range(cell_addr)
@@ -163,6 +163,22 @@ class Manual3Worker(QThread):
 
         # B14 — предназначение (обязательное)
         put_text(cfg["PURPOSE_CELL"], values.get("purpose", ""))
+
+        # B19 — год ввода в эксплуатацию (необязательное). В ячейке лежит полная
+        # дата, отчёт берёт из неё только год (данные!C12 = YEAR(паспорт!B19)),
+        # поэтому день и месяц сохраняем: сначала из текущего значения ячейки,
+        # затем из F051 паспорта, и лишь если взять неоткуда — 01.01.
+        # Пустое поле ячейку не трогает: этап 4 подставит значение из паспорта.
+        year = str(values.get("commission_year", "") or "").strip()
+        cell_addr = cfg.get("COMMISSION_CELL")
+        if year and cell_addr:
+            import passport_data
+            current = ws.Range(cell_addr).Value
+            date_text = passport_data.commission_value(
+                year, current, passport_data.commission_date(folder))
+            if date_text:
+                put_text(cell_addr, date_text)
+                self.log.emit(f"   ✓ Год ввода в эксплуатацию: {date_text}")
 
         # B22 — ФИО специалиста (обязательное)
         put_text(cfg["SPECIALIST_CELL"], values.get("specialist", ""))
