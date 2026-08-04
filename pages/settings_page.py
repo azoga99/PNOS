@@ -90,11 +90,20 @@ class SettingsPage(QWidget):
         lbl_upd_desc.setWordWrap(True)
         g_upd_layout.addWidget(lbl_upd_desc)
 
+        upd_btn_row = QHBoxLayout()
         self.btn_check_update = QPushButton("Проверить обновления")
         self.btn_check_update.setObjectName("blue_button")
         self.btn_check_update.setCursor(Qt.PointingHandCursor)
         self.btn_check_update.clicked.connect(self._check_for_updates)
-        g_upd_layout.addWidget(self.btn_check_update)
+        upd_btn_row.addWidget(self.btn_check_update)
+
+        self.btn_whats_new = QPushButton("Что нового")
+        self.btn_whats_new.setObjectName("segment")
+        self.btn_whats_new.setCursor(Qt.PointingHandCursor)
+        self.btn_whats_new.clicked.connect(self._show_whats_new)
+        upd_btn_row.addWidget(self.btn_whats_new)
+        upd_btn_row.addStretch()
+        g_upd_layout.addLayout(upd_btn_row)
 
         self.btn_install_update = QPushButton("Установить и перезапустить")
         self.btn_install_update.setObjectName("green_button")
@@ -220,6 +229,11 @@ class SettingsPage(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "Выберите файл макроса", "", "Excel (*.xlsm)")
         if path:
             self.edit_macro_path.setText(os.path.normpath(path))
+
+    def _show_whats_new(self):
+        """Открывает окно со всем журналом изменений."""
+        from pages.whatsnew_dialog import WhatsNewDialog
+        WhatsNewDialog.show_full(parent=self)
 
     def _check_for_updates(self):
         """Запуск проверки и скачивания обновлений с GitHub Releases."""

@@ -14,6 +14,7 @@ from PySide6.QtGui import QFont, QPixmap, QPainter, QPen, QColor, QImage, QPaint
 from main_window import MainWindow
 from theme import build_stylesheet
 from utils import resource_path
+from version import APP_VERSION
 
 
 def load_stylesheet() -> str:
@@ -192,7 +193,8 @@ def main():
     window = MainWindow()
     elapsed_ms = int((_time.time() - splash_started) * 1000)
     remaining = max(0, SPLASH_MS - elapsed_ms)
-    QTimer.singleShot(remaining, lambda: (window.show(), splash.finish()))
+    QTimer.singleShot(remaining, lambda: (window.show(), splash.finish(),
+                                          _show_whats_new_if_updated(window)))
 
     # Фоновый прогрев тяжёлых модулей (pandas, aiohttp, win32com, python-docx).
     # Они импортируются лениво, поэтому старт быстрый; прогрев в фоне делает
@@ -200,6 +202,27 @@ def main():
     _prewarm_heavy_imports()
 
     sys.exit(app.exec())
+
+
+def _show_whats_new_if_updated(window):
+    """Один раз после обновления показывает окно «Что нового».
+
+    Сравнивает сохранённую last_seen_version с текущей APP_VERSION. На самой
+    первой установке (значения ещё нет) окно не показывается — версия просто
+    запоминается, чтобы не вываливать весь журнал новому пользователю.
+    """
+    try:
+        settings = QSettings("PNOS", "PNOS")
+        last_seen = settings.value("last_seen_version", "")
+
+        if last_seen and last_seen != APP_VERSION:
+            from pages.whatsnew_dialog import WhatsNewDialog
+            WhatsNewDialog.show_since(str(last_seen), parent=window)
+
+        if last_seen != APP_VERSION:
+            settings.setValue("last_seen_version", APP_VERSION)
+    except Exception:
+        pass
 
 
 def _prewarm_heavy_imports():

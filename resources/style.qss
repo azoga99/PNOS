@@ -828,6 +828,84 @@ QLabel#form_title {
 }
 
 
+/* ═══ Журнал изменений (окно «Что нового») ═══ */
+QDialog#whatsnew { background-color: @bg_content@; }
+
+QWidget#cl_header {
+    background-color: @bg_panel@;
+    border-bottom: 1px solid @border@;
+}
+QLabel#cl_head_title {
+    font-size: 22px;
+    font-weight: 800;
+    color: @text_primary@;
+}
+QLabel#cl_head_sub {
+    font-size: 13px;
+    color: @text_muted@;
+}
+QLineEdit#cl_search {
+    background-color: @bg_input@;
+    border: 1px solid @border@;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    color: @text_primary@;
+    selection-background-color: @accent@;
+}
+QLineEdit#cl_search:focus {
+    border-color: @accent@;
+    background-color: @bg_input_focus@;
+}
+
+QScrollArea#cl_scroll, QWidget#cl_body { background-color: @bg_content@; }
+
+QFrame#cl_card {
+    background-color: @bg_panel@;
+    border: 1px solid @border@;
+    border-radius: 12px;
+    margin-bottom: 14px;
+}
+
+QLabel#cl_version {
+    font-size: 15px;
+    font-weight: 800;
+    color: @text_primary@;
+}
+QLabel#cl_date {
+    font-size: 12px;
+    font-weight: 600;
+    color: @text_faint@;
+}
+
+QLabel#cl_chip {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    border-radius: 9px;
+    padding: 3px 10px;
+}
+QLabel#cl_chip[cat="new"]      { background-color: @chip_new_bg@;      color: @chip_new_fg@; }
+QLabel#cl_chip[cat="improved"] { background-color: @chip_improved_bg@; color: @chip_improved_fg@; }
+QLabel#cl_chip[cat="fixed"]    { background-color: @chip_fixed_bg@;    color: @chip_fixed_fg@; }
+QLabel#cl_chip[cat="changed"]  { background-color: @chip_changed_bg@;  color: @chip_changed_fg@; }
+
+QLabel#cl_item {
+    font-size: 13px;
+    color: @text_secondary@;
+}
+QLabel#cl_empty {
+    font-size: 13px;
+    color: @text_muted@;
+    padding: 40px 0;
+}
+
+QWidget#cl_footer {
+    background-color: @bg_panel@;
+    border-top: 1px solid @border@;
+}
+
+
 /* ═══ Всплывающее уведомление (тост) ═══ */
 QLabel#toast {
     background-color: @bg_panel@;

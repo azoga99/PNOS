@@ -62,6 +62,14 @@ LIGHT = {
     "row_alt": "#f8fafc",
     "selection": "#eff6ff",
     "scrollbar": "#94a3b8",
+    "chip_new_bg": "#dcfce7",
+    "chip_new_fg": "#15803d",
+    "chip_improved_bg": "#dbeafe",
+    "chip_improved_fg": "#1d4ed8",
+    "chip_fixed_bg": "#fef3c7",
+    "chip_fixed_fg": "#b45309",
+    "chip_changed_bg": "#e2e8f0",
+    "chip_changed_fg": "#475569",
 }
 
 DARK = {
@@ -108,6 +116,14 @@ DARK = {
     "row_alt": "#172033",
     "selection": "#1e3a5f",
     "scrollbar": "#475569",
+    "chip_new_bg": "#14352a",
+    "chip_new_fg": "#34d399",
+    "chip_improved_bg": "#172a4a",
+    "chip_improved_fg": "#60a5fa",
+    "chip_fixed_bg": "#3a2a0a",
+    "chip_fixed_fg": "#fbbf24",
+    "chip_changed_bg": "#334155",
+    "chip_changed_fg": "#cbd5e1",
 }
 
 PALETTES = {"light": LIGHT, "dark": DARK}
