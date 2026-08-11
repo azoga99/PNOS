@@ -7,7 +7,7 @@
 CONFIG = {
     # ─── Токены Яндекс.Диска ───────────────────────────────────────────
     # Аккаунт 1: диск с материалами (папки пунктов)
-    "TOKEN_ITEMS": "y0__xCM2daECBjblgMg9Y2j0BZM204VKJ6F6-73TE0_H2I-WqBoNA",
+    "TOKEN_ITEMS": "y0__wgBELiqgOEFGKKeRyDi7uvQGEv9K63PQsbWW8Vx7_BdE3ho6NBs",
 
     # Аккаунт 2: диск с шаблонами (ПНОС_ТТП.docx, ПНОС_ТТП.xlsm)
     "TOKEN_BASE": "y0__xC4qoDhBRiswj4gqIKj0BYwk8LY7QcoloQjehi2IHgNgYkYwIhbW5BO2g",
