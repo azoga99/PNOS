@@ -35,11 +35,13 @@ import win32process
 import aiohttp
 from PIL import Image, ImageOps
 from PySide6.QtCore import QThread, Signal
+from rapidfuzz import fuzz, process
 
 from config import CONFIG
 from status_manager import get_stage_status, set_stage_status, is_point_blocked
 from yandex_api import YandexDiskAPI
-from workers.stage3_worker import normalize_gi_number, find_file
+from workers.repair_worker import find_point_xlsm
+from workers.stage3_worker import normalize_gi_number
 from workers.stage4_worker import WordDialogKiller, find_report_file
 
 # Word COM константы
@@ -58,6 +60,47 @@ def gi_sort_key(path: str) -> int:
     stem = os.path.splitext(name)[0]
     m = re.search(r'(\d+)\s*$', stem)
     return int(m.group(1)) if m else 0
+
+
+def gi_folder_key(name) -> str:
+    """Имя папки актов на диске и номер из паспорт!B12 приводятся одинаково:
+    любое тире — дефис, без пробелов, без регистра. На диске «АВТ–5» с длинным
+    тире, в паспорте после normalize_gi_number — «АВТ-5»."""
+    return normalize_gi_number(name).casefold()
+
+
+def match_gi_folder(folder_names, num, aliases=None) -> tuple[str | None, list[str], str]:
+    """Папка актов ГИ для номера участка: ``(имя, подсказка, причина)``.
+
+    Только точное совпадение после gi_folder_key. Нечёткий поиск здесь нельзя:
+    «тит.521» он сводил к «тит.512», и в отчёт уходили акты чужой установки.
+    Установки с общими актами перечислены явно (``GI_CONFIG.FOLDER_ALIASES``);
+    своя папка важнее соответствия. Похожие имена возвращаются только для
+    подсказки в журнале. Причина: ``ok`` / ``alias`` / ``missing`` / ``ambiguous``.
+    """
+    names = list(folder_names)
+
+    def exact(target):
+        key = gi_folder_key(target)
+        return [n for n in names if gi_folder_key(n) == key]
+
+    own = exact(num)
+    if len(own) == 1:
+        return own[0], [], "ok"
+    if own:
+        return None, own, "ambiguous"
+
+    shared_with = {gi_folder_key(k): v for k, v in (aliases or {}).items()}.get(gi_folder_key(num))
+    if shared_with:
+        shared = exact(shared_with)
+        if len(shared) == 1:
+            return shared[0], [], "alias"
+        if shared:
+            return None, shared, "ambiguous"
+
+    similar = process.extract(num, names, scorer=fuzz.ratio, processor=gi_folder_key,
+                              score_cutoff=70, limit=3)
+    return None, [m[0] for m in similar], "missing"
 
 
 def _norm(text: str) -> str:
@@ -115,7 +158,9 @@ class Stage6Worker(QThread):
         """Фолбэк: читает паспорт!B12 из xlsm без COM (openpyxl, кэшированные значения)."""
         try:
             import openpyxl
-            xlsm = find_file(p_folder, (".xlsm", ".xlsx", ".xls"))
+            # Не первый Excel-файл по алфавиту: на этапе 7 в папке уже лежит
+            # CleanSource.xlsx от этапа 5, и он идёт раньше книги пункта.
+            xlsm = find_point_xlsm(p_folder)
             if not xlsm:
                 return ""
             cell = CONFIG.get("GI_CONFIG", {}).get("PASSPORT_CELL", "B12")
@@ -143,31 +188,53 @@ class Stage6Worker(QThread):
         cache_root = os.path.join(self.local_root, "_gi_cache")
 
         async with aiohttp.ClientSession() as session:
+            listing = await api.get_folder_contents(session, base)
+            if listing is None:
+                self.log.emit(f"   [ГИ] ⚠ Не удалось прочитать список папок «{base}» на диске.")
+                return {num: None for num in numbers}
+            dirs = {it["name"]: it["path"] for it in listing if it.get("type") == "dir"}
+
             for num in numbers:
                 if self._is_cancelled:
                     break
-                folder_path = await api.find_folder_by_name(session, base, num)
-                if not folder_path:
-                    self.log.emit(f"   [ГИ] На диске нет папки актов для «{num}».")
+                name, hint, reason = match_gi_folder(dirs, num, gi_cfg.get("FOLDER_ALIASES"))
+                if reason == "alias":
+                    self.log.emit(f"   [ГИ] «{num}»: своей папки актов нет, акты общие с «{name}» "
+                                  "(список общих папок — config.py, GI_CONFIG → FOLDER_ALIASES).")
+                if reason == "ambiguous":
+                    self.log.emit(f"   [ГИ] ⚠ Для «{num}» на диске несколько подходящих папок: "
+                                  f"{', '.join(hint)}. Какую брать, непонятно — акты не вставляются.")
                     result[num] = None
                     continue
+                if not name:
+                    self.log.emit(f"   [ГИ] На диске нет папки актов для «{num}».")
+                    if hint:
+                        self.log.emit(f"        Похожие по названию: {', '.join(hint)}. Автоматически "
+                                      "не подставляются — это могут быть акты другой установки.")
+                    result[num] = None
+                    continue
+                folder_path = dirs[name]
 
                 items = await api.get_folder_contents(session, folder_path)
                 jpgs = [it for it in (items or [])
                         if it.get("type") == "file"
                         and it["name"].lower().endswith((".jpg", ".jpeg", ".png"))]
                 if not jpgs:
-                    self.log.emit(f"   [ГИ] Папка «{num}» пуста (нет изображений).")
+                    self.log.emit(f"   [ГИ] Папка «{name}» пуста (нет изображений).")
                     result[num] = None
                     continue
 
-                local_dir = os.path.join(cache_root, num)
+                # Кэш — по имени папки на диске, а не по номеру из паспорта:
+                # под номером могли остаться акты, которые прежний нечёткий
+                # поиск взял из чужой папки. Файл с тем же именем, но другим
+                # размером (акт пересканировали) скачивается заново.
+                local_dir = os.path.join(cache_root, name)
                 os.makedirs(local_dir, exist_ok=True)
                 dl_tasks, local_paths = [], []
                 for it in jpgs:
                     lp = os.path.join(local_dir, it["name"])
                     local_paths.append(lp)
-                    if not os.path.exists(lp):
+                    if not os.path.exists(lp) or os.path.getsize(lp) != it.get("size"):
                         dl_tasks.append(api.download_file(session, it["path"], lp))
                 if dl_tasks:
                     await asyncio.gather(*dl_tasks)

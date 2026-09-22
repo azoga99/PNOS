@@ -233,7 +233,7 @@ Stage 1 checks each downloaded point for the required subfolders `config.REQUIRE
 - `config.py → TOKEN_ITEMS` / `TOKEN_BASE` — Yandex Disk OAuth tokens
 - `config.py → DISK_PATHS_ITEMS` — list of remote paths containing `ТТП` subfolders
 - `config.py → MACRO_MASTER_WB_PATH` — absolute path to master ПНОС summary Excel file (or override in Settings UI)
-- `config.py → GI_CONFIG` — stage 7: `PASSPORT_CELL` (B12), `MARKER` (`[ГИ]`), `DISK_BASE` (`/ПНОС`, where `<number>/` act folders live)
+- `config.py → GI_CONFIG` — stage 7: `PASSPORT_CELL` (B12), `MARKER` (`[ГИ]`), `DISK_BASE` (`/ПНОС`, where `<number>/` act folders live), `FOLDER_ALIASES` (installations whose acts live in another installation's folder — explicit list, e.g. УНСО тит.80-131 → 80-130). The act folder is matched **exactly** (`stage6_worker.match_gi_folder`: dashes, spaces and case normalized on both sides) — **never fuzzy**: fuzzy matching gave тит.521/531/520 the acts of тит.512, and missed `АВТ–5` (en dash on the disk). A similar name is only a hint in the log
 - `config.py → REPORT_NAME` — final report filename: `YEAR_SUFFIX` (e.g. `26` → `.26`, bump yearly like `DISK_PATHS_ITEMS`), `SHEET` (`паспорт`), `TTP_CELL` (F9), `POINT_CELL` (B17)
 - `config.py → REQUIRED_FOLDERS` / `INVALID_SUFFIX` — stage-1 validity gate (see "Invalid / skipped points")
 - `config.py → MANUAL_FORM` (cell map for step 3, incl. `COMMISSION_CELL` B19) / `SPECIALISTS` (B22 list) / `EPB_ORGS` (B52 list)
