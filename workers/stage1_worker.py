@@ -280,6 +280,14 @@ class Stage1Worker(QThread):
                     if get_stage_status(local_folder, "stage1"):
                         self.log.emit(f"── Пункт п.{p_num} ──")
                         self.log.emit(f"   ⏭ Этап 1 уже завершен, пропускаем загрузку.")
+                        # Шаблона в папке может не быть: в v2.2.2 книга не
+                        # скачивалась вовсе, и этап 2 падал. Досылаем недостающее,
+                        # готовые файлы не трогаем
+                        for tpl_name, tpl_path in template_files_local.items():
+                            dest = os.path.join(local_folder, tpl_name)
+                            if not os.path.exists(dest):
+                                shutil.copy2(tpl_path, dest)
+                                self.log.emit(f"   п.{p_num} 📄 {tpl_name} дослан в готовую папку")
                         completed_dl += 1
                         pct = 40 + int(completed_dl / len(valid_points) * 55)
                         self.progress.emit(min(pct, 95))
