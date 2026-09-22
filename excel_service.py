@@ -73,6 +73,107 @@ def analyze_excel(file_path: str, batch_size: int = None) -> tuple[int, list[str
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Номер пункта → строка графика (этап 4)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Папка пункта названа по столбцу B («№ п/п по графикам»), а макрос Restore
+# ищет строку графика по столбцу A («Номер п/п»). Числа в A и B у одной строки
+# почти всегда разные, и одно и то же число в A и в B принадлежит разным
+# пунктам: B=3224 — АВТ-5, A=3224 — 517 ХВП. Ошибка перевода не падает, а
+# тихо собирает отчёт по чужому пункту, поэтому любая неоднозначность — отказ.
+
+
+class PlanLookupError(Exception):
+    """Пункт нельзя однозначно найти в графике — собирать по нему отчёт нельзя."""
+
+
+def plan_key(value):
+    """Номер из ячейки графика: 3224, 3224.0 и «3224» дают один ключ."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        num = float(text.replace(",", "."))
+    except ValueError:
+        return text
+    return int(num) if num.is_integer() else text
+
+
+def _filled(value) -> bool:
+    return value is not None and str(value).strip() != ""
+
+
+def build_plan_index(rows, first_row: int = 1) -> dict:
+    """Строки ТТП + ЭПБ листа «ПЛАН», сгруппированные по столбцу B.
+
+    rows — значения столбцов A…H построчно (``Range.Value`` из COM или
+    ``iter_rows(values_only=True)``). Нумерация в B своя у каждого вида
+    оборудования: одно число есть и у печи, и у РВС, и у ТТП. Поэтому берутся
+    только строки с тем же фильтром, по которому этап 1 выбирает пункты:
+    E содержит «ТТП», F содержит «ЭПБ».
+    """
+    index = {}
+    for row_no, row in enumerate(rows, start=first_row):
+        cells = (tuple(row) + (None,) * 8)[:8]
+        a, b, _, place, kind, diag, deleted, mark = cells
+        key = plan_key(b)
+        if key is None:
+            continue
+        if "ТТП" not in str(kind or "").upper() or "ЭПБ" not in str(diag or "").upper():
+            continue
+        index.setdefault(key, []).append({
+            "row": row_no,
+            "a": plan_key(a),
+            "place": str(place or "").strip(),
+            "deleted": _filled(deleted),
+            "marked": _filled(mark),
+        })
+    return index
+
+
+def resolve_plan_number(index: dict, point) -> dict:
+    """Строка графика для пункта из папки «п.<B>».
+
+    Возвращает словарь ``{"row", "a", "place", ...}``; ``a`` — номер п/п,
+    который пишется в ``паспорт!F9``. Нет строки, строк несколько или пуст
+    столбец A — ``PlanLookupError``.
+    """
+    found = index.get(plan_key(point), [])
+    if len(found) > 1:
+        # Повторы в B у ТТП — строки, уже помеченные в G (удалён) или H;
+        # этап 1 такие не выбирает. Живая строка среди них — наш пункт.
+        live = [r for r in found if not r["deleted"] and not r["marked"]]
+        if live:
+            found = live
+    if not found:
+        raise PlanLookupError(
+            f"п.{point} нет в столбце B графика среди строк ТТП / ЭПБ")
+    if len(found) > 1:
+        rows = ", ".join(str(r["row"]) for r in found)
+        raise PlanLookupError(
+            f"п.{point} встречается в столбце B графика несколько раз "
+            f"(строки {rows})")
+    match = found[0]
+    if match["a"] is None:
+        raise PlanLookupError(
+            f"у п.{point} пуст столбец A графика (строка {match['row']})")
+    return match
+
+
+def read_point_f9(xlsm_path: str):
+    """``паспорт!F9`` книги пункта без Excel — номер п/п, по которому Restore
+    взял строку графика. Нужен, чтобы найти пункты, собранные по чужой строке."""
+    import openpyxl
+    wb = openpyxl.load_workbook(xlsm_path, read_only=True, data_only=True)
+    try:
+        return wb["паспорт"]["F9"].value
+    finally:
+        wb.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Анализ пунктов (страница «Анализ пунктов»)
 # ═══════════════════════════════════════════════════════════════════════
 

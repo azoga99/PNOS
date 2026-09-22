@@ -23,7 +23,76 @@ import win32gui
 import win32con
 
 from config import CONFIG
-from status_manager import get_stage_status, set_stage_status, is_point_blocked
+from status_manager import (
+    get_stage_status, set_stage_status, is_point_blocked, reset_stage_status,
+)
+from excel_service import (
+    PlanLookupError, build_plan_index, plan_key, read_point_f9, resolve_plan_number,
+)
+from workers.repair_worker import find_point_xlsm
+
+
+# =====================================================================
+# Пункты, собранные по чужой строке графика
+# =====================================================================
+# До 2.2.4 этап 4 мог записать в F9 не тот номер п/п (см.
+# excel_service.resolve_plan_number), и отчёт собирался по другому пункту —
+# с его установкой и актами ГИ. Такие пункты этап 4 находит сам и собирает
+# заново.
+
+# Отчёты, собранные по чужой строке, переносятся сюда, а не удаляются: такой
+# отчёт мог уйти на согласование, его стоит увидеть. find_report_file и
+# «Правка отчётов» смотрят только в корень папки пункта — отсюда отчёт уже
+# никуда не подхватится.
+FOREIGN_REPORTS_DIR = "_отчёт по чужой строке графика"
+
+# Снимаются вместе с этапом 4: отчёт этапа 5 и всё, что этапы 6–7 в него
+# вставили, собраны из паспорта с чужой строкой; номер ГИ — оттуда же.
+REBUILD_KEYS = ("stage3", "stage4", "stage5", "stage6", "gi_number")
+
+
+def built_by_foreign_row(p_folder: str, plan: dict):
+    """F9 книги пункта, если он не совпадает с номером п/п по графику.
+
+    None — всё сходится или проверить нечем (нет книги, F9 пуст или не
+    читается): готовый пункт по догадке не трогаем.
+    """
+    book = find_point_xlsm(p_folder)
+    if not book:
+        return None
+    try:
+        f9 = plan_key(read_point_f9(book))
+    except Exception:
+        return None
+    if f9 is None or f9 == plan["a"]:
+        return None
+    return f9
+
+
+def set_aside_reports(p_folder: str) -> list[str]:
+    """Переносит отчёты из корня папки пункта в FOREIGN_REPORTS_DIR.
+
+    Отчёт — те же имена, что ищет find_report_file: «ЗЭПБ…» и «Отчет_…»,
+    включая копии «ПЕЧАТЬ». Возвращает имена перенесённых файлов.
+    """
+    moved = []
+    aside = os.path.join(p_folder, FOREIGN_REPORTS_DIR)
+    for name in sorted(os.listdir(p_folder)):
+        src = os.path.join(p_folder, name)
+        if name.startswith("~$") or not name.lower().endswith(".docx") or not os.path.isfile(src):
+            continue
+        if not (name.startswith("ЗЭПБ") or name.startswith("Отчет_")):
+            continue
+        os.makedirs(aside, exist_ok=True)
+        base, ext = os.path.splitext(name)
+        dest = os.path.join(aside, name)
+        n = 2
+        while os.path.exists(dest):
+            dest = os.path.join(aside, f"{base} ({n}){ext}")
+            n += 1
+        shutil.move(src, dest)
+        moved.append(name)
+    return moved
 
 
 # =====================================================================
@@ -288,37 +357,26 @@ class Stage3Worker(QThread):
             self.info.emit("Excel и Word запущены", "done")
             self.log.emit("✅ COM-объекты готовы. Начинаем обработку.")
 
-            # --- Сбор маппинга из Мастер-файла ---
-            self.log.emit("\n🔧 Чтение столбцов A и B из листа 'ПЛАН' Мастер-файла...")
-            id_mapping = {}
+            # --- Строки графика: папка пункта названа по B, Restore ищет по A ---
+            # Диапазон — по UsedRange, а не End(xlUp): при включённом фильтре
+            # End(xlUp) останавливается на последней видимой строке, и хвост
+            # графика (свежие пункты) выпадал бы из поиска.
+            try:
+                mtime = time.strftime("%d.%m.%Y %H:%M", time.localtime(os.path.getmtime(master_path)))
+            except OSError:
+                mtime = "?"
+            self.log.emit(f"\n🔧 Чтение листа 'ПЛАН': {master_path} (изменён {mtime})")
             try:
                 master_ws = pnos_master_wb.Sheets("ПЛАН")
-                
-                # Ищем последнюю заполненную строку в столбце B (-4162 = xlUp)
-                last_row = master_ws.Cells(master_ws.Rows.Count, "B").End(-4162).Row
-                
-                if last_row > 1:
-                    # Читаем сразу весь массив для максимальной скорости (от A1 до B_last_row)
-                    data_range = master_ws.Range(f"A1:B{last_row}").Value
-                    
-                    if data_range:
-                        # data_range это tuple из tuples: ((A1, B1), (A2, B2), ...)
-                        for row_val in data_range:
-                            col_a = row_val[0]
-                            col_b = row_val[1]
-                            
-                            if col_b is not None:
-                                try:
-                                    key = int(float(col_b))
-                                except (ValueError, TypeError):
-                                    key = str(col_b).strip()
-                                
-                                id_mapping[key] = col_a
-                                
-                self.log.emit(f"   ✓ Загружено {len(id_mapping)} связей.")
+                used = master_ws.UsedRange
+                last_row = used.Row + used.Rows.Count - 1
+                plan_index = build_plan_index(master_ws.Range(f"A1:H{last_row}").Value or ())
             except Exception as e:
-                self.log.emit(f"   ⚠ Ошибка при чтении листа 'ПЛАН': {e}")
-            # ----------------------------------------
+                # Без графика любой пункт ушёл бы в Restore с номером из папки,
+                # то есть по чужой строке. Дальше идти нельзя.
+                raise RuntimeError(f"не удалось прочитать лист 'ПЛАН' графика: {e}") from e
+            self.log.emit(f"   ✓ Строк ТТП / ЭПБ: {sum(len(v) for v in plan_index.values())} "
+                          f"(всего строк на листе: {last_row}).")
 
             # 3. Цикл обработки пунктов
             processed_count = 0
@@ -336,43 +394,69 @@ class Stage3Worker(QThread):
                     continue
                 p_number_str = p_name[2:] if p_name.startswith("п.") else p_name
 
+                # --- Строка графика: папка названа по B, Restore ищет по A ---
+                try:
+                    plan, plan_error = resolve_plan_number(plan_index, p_number_str), None
+                except PlanLookupError as e:
+                    plan, plan_error = None, e
+
                 # --- Проверка статуса (Инкрементальная логика) ---
                 if get_stage_status(p_folder, "stage3"):
+                    foreign_f9 = built_by_foreign_row(p_folder, plan) if plan else None
+                    if foreign_f9 is None:
+                        self.log.emit(f"\n── {p_name} ──")
+                        self.log.emit("   ⏭ Этап 3 уже завершён, пропускаем.")
+                        if plan_error is not None:
+                            self.log.emit(f"   ⚠ {plan_error}: по своей ли строке собран "
+                                          "пункт, проверить нечем.")
+                        report_data.append({
+                            "№ Пункта": p_number_str,
+                            "Паспорт": "✔",
+                            "Excel": "✔",
+                            "Сводные": "✔",
+                            "Результат": "⚪ Пропущен"
+                        })
+                        processed_count += 1
+                        continue
+
+                    # Собран по чужой строке — отчёт этапа 5 и всё, что в него
+                    # вставили этапы 6–7, неверны. Собираем пункт заново.
                     self.log.emit(f"\n── {p_name} ──")
-                    self.log.emit("   ⏭ Этап 3 уже завершён, пропускаем.")
+                    self.log.emit(f"   ⚠ Пункт был собран по чужой строке графика: в паспорт!F9 "
+                                  f"стоит {foreign_f9}, а по графику должно быть {plan['a']} "
+                                  f"({plan['place'] or 'установка не указана'}).")
+                    moved = set_aside_reports(p_folder)
+                    for key in REBUILD_KEYS:
+                        reset_stage_status(p_folder, key)
+                    if moved:
+                        self.log.emit(f"   Прежний отчёт перенесён в «{FOREIGN_REPORTS_DIR}»: "
+                                      + ", ".join(moved))
+                    self.log.emit("   Этап 4 выполняется заново, затем пройдите этапы 5–7.")
+                    self.info.emit(f"{p_name} был собран по чужой строке графика — "
+                                   "пересобирается, после этого пройдите этапы 5–7", "warn")
+                else:
+                    self.log.emit(f"\n── {p_name} ──")
+
+                self.info.emit(f"Обработка {p_name}...", "wait")
+
+                if plan_error is not None:
+                    e = plan_error
+                    self.log.emit(f"   ✗ {e}.")
+                    self.log.emit("     Пункт пропущен: номер п/п для паспорт!F9 не определён, "
+                                  "а отчёт по чужой строке графика собирать нельзя.")
+                    self.log.emit(f"     Проверьте, тот ли файл графика выбран: {master_path}")
+                    self.info.emit(f"{p_name} — нет в графике", "error")
                     report_data.append({
                         "№ Пункта": p_number_str,
-                        "Паспорт": "✔",
-                        "Excel": "✔",
-                        "Сводные": "✔",
-                        "Результат": "⚪ Пропущен"
+                        "Паспорт": False,
+                        "Excel": False,
+                        "Результат": "❌ Нет в графике",
                     })
-                    processed_count += 1
+                    errors_count += 1
                     continue
-                
-                self.info.emit(f"Обработка {p_name}...", "wait")
-                self.log.emit(f"\n── {p_name} ──")
-                
-                # Парсим номер пункта из папки "п.1234"
-                try:
-                    p_number = int(p_number_str)
-                except ValueError:
-                    p_number = 2719 # Фолбэк на дефолт если странное название
-                
-                # --- Переопределение p_number через Мастер-файл ---
-                # Ищем по числу:
-                mapped_id = id_mapping.get(p_number)
-                if mapped_id is None:
-                    # Если не нашли, ищем по строке:
-                    mapped_id = id_mapping.get(str(p_number))
-                
-                if mapped_id is not None:
-                    self.log.emit(f"   [Маппинг] Найдено соответствие: п.{p_number} -> Столбец А: {mapped_id}")
-                    p_number_for_f9 = mapped_id
-                else:
-                    self.log.emit(f"   [Маппинг] ⚠ п.{p_number} не найден в столбце B листа 'ПЛАН'. Оставляем {p_number}.")
-                    p_number_for_f9 = p_number
-                # --------------------------------------------------
+                p_number_for_f9 = plan["a"]
+                self.log.emit(f"   [График] п.{p_number_str} → № п/п {plan['a']} "
+                              f"(строка {plan['row']}, {plan['place'] or 'установка не указана'})")
 
                 self.action_update.emit(f"Извлечение из паспорта для {p_number_str}...")
                 
@@ -387,8 +471,10 @@ class Stage3Worker(QThread):
                 doc = None
 
                 try:
-                    # Поиск файла ПНОС_ТТП.xlsm
-                    work_path = find_file(p_folder, (".xls", ".xlsx", ".xlsm"))
+                    # Поиск файла ПНОС_ТТП.xlsm. Не find_file: при повторном
+                    # прогоне в папке лежит CleanSource.xlsx от этапа 5, и по
+                    # алфавиту он идёт раньше книги пункта.
+                    work_path = find_point_xlsm(p_folder)
                     if not work_path:
                         self.log.emit(f"   ✗ Ошибка: Excel-файл (ПНОС_ТТП.xlsm) не найден в папке")
                         errors_count += 1
@@ -519,6 +605,9 @@ class Stage3Worker(QThread):
                             set_stage_status(p_folder, "gi_number", gi_num)
                             self.log.emit(f"   [ГИ] Номер участка ({gi_cell}): {gi_num}")
                         else:
+                            # Номер от прошлого прогона мог остаться с чужой
+                            # строки графика — этап 7 искал бы чужие акты.
+                            reset_stage_status(p_folder, "gi_number")
                             self.log.emit(f"   [ГИ] ⚠ Ячейка {gi_cell} пуста — номер актов ГИ не определён.")
                     except Exception as e:
                         self.log.emit(f"   [ГИ] ⚠ Не удалось прочитать {gi_cell}: {e}")
