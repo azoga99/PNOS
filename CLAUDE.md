@@ -8,10 +8,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Running and Building
 
-The working interpreter with all dependencies installed is **`C:\Users\volod\AppData\Local\Python\bin\python.exe`** (Python 3.14). Beware: bare `python`/`py` is the WindowsApps stub, and `...\Programs\Python\Python313\python.exe` lacks the app's dependencies and has a broken lxml. Use the AppData\Local\Python interpreter for all runs and builds.
+The project is developed on more than one PC, and the working interpreter differs per machine — **check which one has the deps before running anything** (`& $py -c "import PySide6, win32com, docx, pandas, lxml.etree"`). Bare `python` may resolve to the WindowsApps stub; always call an interpreter by full path.
+- `volod` PC: `C:\Users\volod\AppData\Local\Python\bin\python.exe` (3.14). There `...\Programs\Python\Python313` lacks the deps and has a broken lxml.
+- `Олейник` PC: `C:\Users\Олейник\AppData\Local\Programs\Python\Python313\python.exe` (3.13) has all app deps and PyInstaller, but **not pytest** (`& $py -m pip install pytest`).
 
 ```powershell
-$py = "C:\Users\volod\AppData\Local\Python\bin\python.exe"
+$py = "<interpreter for this machine, see above>"
 
 # Install dependencies (no requirements.txt exists — install manually)
 & $py -m pip install PySide6 aiohttp aiofiles python-docx openpyxl Pillow rapidfuzz pandas requests pywin32
@@ -26,13 +28,23 @@ $py = "C:\Users\volod\AppData\Local\Python\bin\python.exe"
 ```powershell
 # Tests (pytest.ini: testpaths = repair/tests tests) — ~220 tests, ~80 s
 & $py -m pytest
+
+# One file / one test
+& $py -m pytest tests/test_gi_folder.py
+& $py -m pytest repair/tests/test_dates.py -k "<name substring>"
+
+# Read-only audit: was any point built from someone else's schedule row (F9 vs folder number)?
+& $py tools/check_plan_numbers.py <points folder> [--schedule <график.xlsm>]
 ```
 
 Tests cover the pure core of the «Ремонт» module (`repair/tests`) and worker
-helpers (`tests`). Several of them run against **real files on this machine**
-(`C:\Users\volod\Desktop\Сданы на ПНОС — копия`) and skip when those are absent —
-if a run reports skips, check the `_CANDIDATES` paths in `repair/tests/test_map_labels.py`
-and `repair/tests/test_pdf_preview.py` before assuming the tests are fine.
+helpers (`tests`). Several of them run against **real point files hard-coded to
+the `volod` PC** (`C:\Users\volod\Desktop\Сданы на ПНОС — копия`, `Готовые…`) and
+skip when those are absent — so on any other machine skips are expected. The paths
+live in `_CANDIDATES` in `repair/tests/test_map_labels.py` / `test_pdf_preview.py`
+and a list in `test_annotation.py`; don't treat a run with skips as full coverage.
+The JSON fixtures in `repair/tests/fixtures` (reference reports before/after repair)
+were built once by `repair/tests/_gen_fixtures.py --src <dir of extracted *.txt>`.
 
 Everything outside those two folders (pipeline stages, GUI) has no automated
 tests: verify by running the full GUI. Windows-only: COM automation depends on
@@ -40,9 +52,10 @@ installed Microsoft Word and Excel, and OCR on the Windows Russian language pack
 
 ## Commits and releases
 
-- Commit messages and release notes are written in **Russian**, and must **not** contain a `Co-Authored-By` trailer (explicit user requirement).
+- Commit messages and release notes are written in **Russian**, and must **not** contain a `Co-Authored-By` trailer (explicit user requirement). More broadly, the repo must carry **no trace of AI assistance**: no AI trailers, no "Generated with…" lines, no mentions of Claude/нейросеть in commits, PRs or code comments — the author is the user.
+- Regular commits follow **Conventional Commits** («Соглашение о коммитах»): `<type>: <описание на русском>` (`feat`, `fix`, `docs`, `refactor`, `test`, `chore`…). Release commits keep the `vX.Y.Z: <кратко>` form seen in history.
 - Repo is `azoga99/PNOS`; `gh` is authenticated as azoga99.
-- **Releasing a new version is a strict procedure — always follow the `release-pnos` skill**, do not improvise. Summary: bump `version.py → APP_VERSION` → commit + `git push origin main` → build EXE via PyInstaller → `Compress-Archive dist\ПНОС.exe -DestinationPath dist\PNOS.zip` (exactly one `.exe` inside) → `gh release create vX.Y.Z dist/PNOS.zip --repo azoga99/PNOS --title vX.Y.Z --latest --notes "..."`. The in-app updater hits `releases/latest` and requires an asset named exactly `PNOS.zip` (case-insensitive) and a tag that parses higher than users' current version; draft/prerelease releases are invisible to it.
+- **Releasing a new version is a strict procedure — always follow the `release-pnos` skill**, do not improvise. The skill is user-level and is not installed on every PC (absent on the `Олейник` one); if it is missing, follow this summary exactly and ask before publishing. Summary: bump `version.py → APP_VERSION` and add a `## X.Y.Z — ДД.ММ.ГГГГ` section on top of `CHANGELOG.md` (user-facing Russian, it is shown in the «Что нового» window) → commit (message `vX.Y.Z: <кратко>`) + `git push origin main` → build EXE via PyInstaller → `Compress-Archive dist\ПНОС.exe -DestinationPath dist\PNOS.zip` (exactly one `.exe` inside) → `gh release create vX.Y.Z dist/PNOS.zip --repo azoga99/PNOS --title vX.Y.Z --latest --notes "..."`. The in-app updater hits `releases/latest` and requires an asset named exactly `PNOS.zip` (case-insensitive) and a tag that parses higher than users' current version; draft/prerelease releases are invisible to it.
 
 ## Architecture
 
@@ -99,7 +112,7 @@ Note the worker-number vs UI-stage-number offset: UI stage 3 is manual (no worke
 |---|---|---|
 | 1 – Создание структуры | `Stage1Worker` | Async parallel download from Yandex Disk. Finds point folders (`п.NNNN`), downloads `Паспорт`, `Первичка`, `Стар. ЭПБ` + optional folders, copies templates. Uses `asyncio.gather` for all points simultaneously. |
 | 2 – Копирование таблиц | `Stage2Worker` | Reads table #3 from `Акт замеров толщины стенки.docx` via `python-docx` (no COM for Word), writes it to `ПНОС_ТТП.xlsm` sheets `Импорт` and `Импорт (ПР)` via Excel COM. |
-| 3 – Ручной контроль | `Manual3Worker` (`workers/manual3_worker.py`) | On-screen **form** (no manual Excel needed) + the «Ремонт» module for points that have repair documents. Left: per-point list with status (✅ filled / ⬜ empty / ⏭ skipped / 🚫 invalid) and a `• ремонт` / `• ремонт (вручную)` mark. Right: fields written to the `паспорт` sheet — B14 purpose (prefilled `транспортировки `), B19 commissioning year (see below), B22 specialist (dropdown, `config.SPECIALISTS`), B33 date, B52 org (dropdown, `config.EPB_ORGS`), B51 auto да/нет from B52, B53 reg-num, B54 EPB date, B55 sheet count. Required: B14/B22/B33. Dates written as **text** (`NumberFormat="@"`) so Excel keeps the exact `ДД.ММ.ГГГГ`. **Год ввода в эксплуатацию (B19)** is the one field the pipeline itself also writes: stage 4 fills B19 from the passport DocVariable `F051` (`DOCVARIABLE_MAP`), and the report prints only the year — `данные!C12 = YEAR(паспорт!B19)` → MERGEFIELD `ГодВвода` → «введен в эксплуатацию с … г». That is the **only** formula in the whole workbook reading B19, and no VBA macro touches it (`Restore`/`Save` work on columns AK/AL). 5 of 34 passports have no `F051` at all, so B19 stayed empty and `YEAR("")` printed **1900** in the report — hence the manual field. Prefill comes from the passport `.docx` itself, not from the workbook: at step 3 the cell is still empty, and DocVariables are readable without Word/COM from `word/settings.xml` (`passport_data.py`, cached per session in `_passport_commission_year`). Writing keeps the day/month of the existing date and only swaps the year (`passport_data.commission_value`); an empty field leaves the cell alone. `Stage3Worker._apply_manual_commission_year` re-applies the manual year **after** `DOCVARIABLE_MAP`, otherwise stage 4 would overwrite it with `F051`. Drafts persist in `.pnos_status.json` (`manual3_draft`); "Записать всё в Excel" validates required fields for every non-skipped/non-invalid point, then `Manual3Worker` writes each xlsm via COM and sets `manual3`. "Пропустить пункт" sets `skipped`; "Открыть в Excel" opens the xlsm. |
+| 3 – Ручной контроль | `Manual3Worker` (`workers/manual3_worker.py`) | On-screen **form** (no manual Excel needed) + the «Ремонт» module for points that have repair documents. Left: per-point list with status (✅ filled / ⬜ empty / ⏭ skipped / 🚫 invalid) and a `• ремонт` / `• ремонт (вручную)` mark. Right: fields written to the `паспорт` sheet — B14 purpose (prefilled `транспортировки `), B19 commissioning year (see below), B22 specialist (dropdown), B33 date, B52 org (dropdown) — both dropdown lists come from `user_data.get_list("specialists" / "epb_orgs")`, editable in Settings and stored in `QSettings` `lists/*`; `config.SPECIALISTS`/`EPB_ORGS` are only the defaults («Сбросить к стандартным»), B51 auto да/нет from B52, B53 reg-num, B54 EPB date, B55 sheet count. Required: B14/B22/B33. Dates written as **text** (`NumberFormat="@"`) so Excel keeps the exact `ДД.ММ.ГГГГ`. **Год ввода в эксплуатацию (B19)** is the one field the pipeline itself also writes: stage 4 fills B19 from the passport DocVariable `F051` (`DOCVARIABLE_MAP`), and the report prints only the year — `данные!C12 = YEAR(паспорт!B19)` → MERGEFIELD `ГодВвода` → «введен в эксплуатацию с … г». That is the **only** formula in the whole workbook reading B19, and no VBA macro touches it (`Restore`/`Save` work on columns AK/AL). 5 of 34 passports have no `F051` at all, so B19 stayed empty and `YEAR("")` printed **1900** in the report — hence the manual field. Prefill comes from the passport `.docx` itself, not from the workbook: at step 3 the cell is still empty, and DocVariables are readable without Word/COM from `word/settings.xml` (`passport_data.py`, cached per session in `_passport_commission_year`). Writing keeps the day/month of the existing date and only swaps the year (`passport_data.commission_value`); an empty field leaves the cell alone. `Stage3Worker._apply_manual_commission_year` re-applies the manual year **after** `DOCVARIABLE_MAP`, otherwise stage 4 would overwrite it with `F051`. Drafts persist in `.pnos_status.json` (`manual3_draft`); "Записать всё в Excel" validates required fields for every non-skipped/non-invalid point, then `Manual3Worker` writes each xlsm via COM and sets `manual3`. "Пропустить пункт" sets `skipped`; "Открыть в Excel" opens the xlsm. |
 | 4 – Запуск макросов | `Stage3Worker` | Reads Word passport DocVariables via Word COM, writes values to Excel `паспорт` sheet, runs `Restore` then `Save` VBA macros. Also reads column-A↔B mapping from master ПНОС file. Caches `паспорт!B12` (ГИ section number) into `.pnos_status.json` as `gi_number` for stage 7. |
 | 5 – Создание отчёта | `Stage4Worker` | Runs `TransTab` macro, creates `CleanSource.xlsx` from `Экспорт` sheet, does MailMerge in Word, fills table from `Спецификация трубопровода.docx`, recalculates residual-life tables, replaces ЛНК certificate number based on act date. Saves the report as `ЗЭПБ № ТТП-<F9>.<YY> - ттп № <B17>.docx` (F9/B17 read from the `паспорт` sheet, year suffix from `config.REPORT_NAME`; falls back to `Отчет_<num>.docx` if either cell is empty). Later stages locate the report via `find_report_file()` in `stage4_worker.py`, which matches both the new `ЗЭПБ…` name and the legacy `Отчет_*` (and prefers the non-`ПЕЧАТЬ` copy). |
 | 6 – Вставка картинок | `Stage5Worker` | Color-analyzes photos (red vs blue via Pillow), inserts rotated photos into `[ФОТО1]`/`[ФОТО2]` markers in the report, deletes empty/valve rows from the UT table, renumbers column 1, flags Г.3 table violations. |
@@ -236,7 +249,7 @@ Stage 1 checks each downloaded point for the required subfolders `config.REQUIRE
 - `config.py → GI_CONFIG` — stage 7: `PASSPORT_CELL` (B12), `MARKER` (`[ГИ]`), `DISK_BASE` (`/ПНОС`, where `<number>/` act folders live), `FOLDER_ALIASES` (installations whose acts live in another installation's folder — explicit list, e.g. УНСО тит.80-131 → 80-130). The act folder is matched **exactly** (`stage6_worker.match_gi_folder`: dashes, spaces and case normalized on both sides) — **never fuzzy**: fuzzy matching gave тит.521/531/520 the acts of тит.512, and missed `АВТ–5` (en dash on the disk). A similar name is only a hint in the log
 - `config.py → REPORT_NAME` — final report filename: `YEAR_SUFFIX` (e.g. `26` → `.26`, bump yearly like `DISK_PATHS_ITEMS`), `SHEET` (`паспорт`), `TTP_CELL` (F9), `POINT_CELL` (B17)
 - `config.py → REQUIRED_FOLDERS` / `INVALID_SUFFIX` — stage-1 validity gate (see "Invalid / skipped points")
-- `config.py → MANUAL_FORM` (cell map for step 3, incl. `COMMISSION_CELL` B19) / `SPECIALISTS` (B22 list) / `EPB_ORGS` (B52 list)
+- `config.py → MANUAL_FORM` (cell map for step 3, incl. `COMMISSION_CELL` B19) / `SPECIALISTS` (B22 list) / `EPB_ORGS` (B52 list) — the two lists are defaults only; a user who has saved an edited list keeps their own copy in `QSettings` (`user_data.py`), so a config change does not reach them until «Сбросить к стандартным»
 - `config.py → FIX_REPORTS` — Правка отчётов page: `DATE_FIELD`, `CERT_FIXES` (certificate numbers change when experts recertify), `TABLE_FIX` (regulation number/date, bump when a new положение is issued), `ORDER_HEADING`
 - `config.py → ANALYTICS` — Анализ пунктов page: `SPECIALISTS` (surname list), `DATA_START_ROW`, schedule column letters (`COL_PERSON` MF, `COL_DELETED` G, status columns QZ/RB/RC/RE), `MAX_POINTS`
 - `repair/config.py → REPAIR_CONFIG` — модуль «Ремонт»: шаблоны строки «Сведения о ремонте» (`SV`), `SMALL_ELEMENTS` / `EXCLUDE_FROM_TABLE3` (задвижки и бобышки не обновляются), пороги
