@@ -17,7 +17,7 @@ import json
 import os
 import re
 
-from status_manager import STATUS_FILE_NAME, is_point_blocked
+from status_manager import GI_WAIT_KEY, STATUS_FILE_NAME, is_point_blocked
 
 # UI-шаг -> ключ в .pnos_status.json (как MainWindow.STEP_STATUS_KEYS:
 # шаг 3 ручной, поэтому воркеры этапов 4–7 пишут stage3–stage6)
@@ -29,6 +29,7 @@ STEP_NAMES = {1: "Структура", 2: "Таблицы", 3: "Форма", 4: 
               5: "Отчёт", 6: "Фото", 7: "Акты ГИ"}
 
 FORM_STEP = 3
+GI_STEP = 7
 
 
 def point_number(name: str) -> str:
@@ -88,6 +89,10 @@ def build_row(folder: str) -> dict:
     elif done[2] and not done[FORM_STEP]:
         steps[FORM_STEP] = "wait"
         state, kind = "Ждёт формы", "warn"
+    elif nxt == GI_STEP and data.get(GI_WAIT_KEY):
+        # Шаг 7 прошёл без актов: не «не начат», а ждёт, пока акты появятся
+        steps[GI_STEP] = "wait"
+        state, kind = f"{data[GI_WAIT_KEY]} — повторите шаг 7, когда появятся", "warn"
     else:
         state, kind = f"Следующий шаг: {nxt} · {STEP_NAMES[nxt]}", "info"
 

@@ -49,6 +49,7 @@ class ProcessPageMixin:
         self._run = None            # (UI-шаг, номера пунктов | None) — что идёт сейчас
         self._run_progress = 0
         self._step_summary = {}     # UI-шаг -> «Готово 3 из 4 · …» для журнала
+        self._step_problems = {}    # UI-шаг -> были ли ошибки или замечания
         self._chain = None          # пункты цепочки «До конца»; None — цепочки нет
         self._chain_paused = []     # пункты, на которых цепочка ждёт формы
         # Таблица перечитывается во время прогона, но не чаще раза в 1,5 с
@@ -215,7 +216,10 @@ class ProcessPageMixin:
         for point in participants or []:
             row = rows.get(point)
             if row is None or row["steps"].get(step) != "done":
-                self._chain_drop(point, step, f"шаг {step} не выполнен, причина в журнале")
+                reason = f"шаг {step} не выполнен, причина в журнале"
+                if row is not None and row["steps"].get(step) == "wait":
+                    reason = row["state"][:1].lower() + row["state"][1:]
+                self._chain_drop(point, step, reason)
         self._chain_next()
 
     # ═══════════════════════════════════════════════════════════════
@@ -236,25 +240,34 @@ class ProcessPageMixin:
                                   "фокус мыши, пока идут макросы", "warn")
 
     def _summarize_details(self, details: list):
-        """Считает (готово, ошибки, пропущено) по списку строк-результатов."""
-        done = errors = skipped = 0
+        """
+        Считает (готово, ошибки, пропущено, замечания) по строкам-результатам.
+        Замечание («⚠ Без актов ГИ», «⚠ Без фото») — шаг прошёл, но пункт
+        чего-то ждёт; это не ошибка.
+        """
+        done = errors = skipped = warned = 0
         for d in details:
             res = str(d.get("Результат", d.get("status", ""))).lower()
             if "пропущен" in res or "⚪" in res:
                 skipped += 1
             elif "успешно" in res or "✅" in res or "✔" in res or "частично" in res:
                 done += 1
+            elif "⚠" in res:
+                warned += 1
             elif res:
                 errors += 1
             else:
                 done += 1
-        return done, errors, skipped
+        return done, errors, skipped, warned
 
     def _store_stage_result(self, step: int, columns: list, details: list):
         """Сохраняет результат этапа для вкладки «Отчёт о прогоне» и журнала."""
         self._stage_results[step] = {"columns": columns, "details": details}
-        done, errors, skipped = self._summarize_details(details)
+        done, errors, skipped, warned = self._summarize_details(details)
+        self._step_problems[step] = bool(errors or warned)
         parts = [f"готово {done} из {len(details)}"]
+        if warned:
+            parts.append(f"с замечаниями {warned}")
         if errors:
             parts.append(f"ошибок {errors}")
         if skipped:
@@ -268,8 +281,11 @@ class ProcessPageMixin:
         """Общее завершение шага: журнал, таблица, цепочка «До конца»."""
         run, self._run = self._run, None
         summary = self._step_summary.pop(step, "")
+        problems = self._step_problems.pop(step, False)
         if success:
-            self._add_activity(step, "Шаг завершён" + (f": {summary}" if summary else ""), "done")
+            # Зелёная строка — только если все пункты действительно готовы
+            self._add_activity(step, "Шаг завершён" + (f": {summary}" if summary else ""),
+                               "warn" if problems else "done")
         else:
             self._add_activity(step, "Шаг завершён с ошибками"
                                + (f": {summary}" if summary else ""), "error")

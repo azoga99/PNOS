@@ -117,3 +117,20 @@ def test_plain_folder_wins_over_invalid_twin(tmp_path):
     assert len(rows) == 1
     assert rows[0]["folder"] == str(plain)
     assert rows[0]["steps"][1] == "done"
+
+
+def test_step_seven_without_acts_waits_with_reason(tmp_path):
+    folder = _point(tmp_path, "п.3186", **_done(1, 2, 3, 4, 5, 6),
+                    stage6_wait="Нет актов ГИ (нет папки для 21-20)")
+    row = build_row(str(folder))
+    assert row["steps"][7] == "wait"
+    assert row["state"].startswith("Нет актов ГИ (нет папки для 21-20)")
+    assert row["state_kind"] == "warn"
+
+
+def test_step_seven_done_ignores_stale_wait(tmp_path):
+    folder = _point(tmp_path, "п.3186", **_done(*range(1, 8)),
+                    stage6_wait="Нет актов ГИ")
+    row = build_row(str(folder))
+    assert row["steps"][7] == "done"
+    assert row["state"] == "Готов"

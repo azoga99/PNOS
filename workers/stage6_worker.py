@@ -40,7 +40,7 @@ from rapidfuzz import fuzz, process
 from config import CONFIG
 from status_manager import (get_stage_status, set_stage_status, is_point_blocked,
                             missing_points, no_selected_points_message,
-                            select_point_folders)
+                            reset_stage_status, select_point_folders, GI_WAIT_KEY)
 from yandex_api import YandexDiskAPI
 from workers.repair_worker import find_point_xlsm
 from workers.stage3_worker import normalize_gi_number
@@ -54,6 +54,11 @@ WD_SHAPE_CENTER = -999995     # значение Left/Top = центрирова
 # ~520×735, совпадающий с эталоном оформления; при wdShapeCenter акт центрируется
 # в области печати страницы.
 GI_MAX_W, GI_MAX_H = 520.0, 750.0
+
+
+def gi_wait_text(detail: str) -> str:
+    """Почему шаг 7 ждёт: «Нет актов ГИ (нет папки для 21-20)»."""
+    return f"Нет актов ГИ ({detail})" if detail else "Нет актов ГИ"
 
 
 def gi_sort_key(path: str) -> int:
@@ -673,9 +678,13 @@ class Stage6Worker(QThread):
 
                     if gi_ok:
                         set_stage_status(p_folder, "stage6", True)
+                        reset_stage_status(p_folder, GI_WAIT_KEY)
                         row["Результат"] = "✅ Успешно"
                         self.info.emit(f"{p_name} — готово", "done")
                     else:
+                        # Причина — для таблицы «Пункты»: без неё пункт выглядел
+                        # бы как «шаг 7 не начат»
+                        set_stage_status(p_folder, GI_WAIT_KEY, gi_wait_text(row["Акты ГИ"]))
                         row["Результат"] = "⚠ Без актов ГИ"
                         self.log.emit("   ⏳ Шаг 7 не отмечен выполненным: метка "
                                       "оставлена в отчёте. Выложите акты на диск и "

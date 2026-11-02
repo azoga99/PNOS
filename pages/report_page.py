@@ -84,7 +84,7 @@ class RunReportMixin:
         # Сводка
         total_errors = 0
         for step, res in self._stage_results.items():
-            _, errors, _ = self._summarize_details(res.get("details", []))
+            _, errors, _, _ = self._summarize_details(res.get("details", []))
             total_errors += errors
         elapsed = self._fmt_duration(time.time() - self._start_time) if self._start_time else "—"
         points = self._scan_points()
@@ -139,7 +139,12 @@ class RunReportMixin:
                         if col == "Результат":
                             low = text.lower()
                             good = "успешно" in low or "✅" in low or "частично" in low or "пропущен" in low
-                            item.setForeground(c_ok if good else c_bad)
+                            if good:
+                                item.setForeground(c_ok)
+                            elif "⚠" in low:
+                                item.setForeground(QColor(STATUS_COLORS["wait"]))
+                            else:
+                                item.setForeground(c_bad)
                     item.setTextAlignment(Qt.AlignCenter)
                     table.setItem(r, c, item)
 

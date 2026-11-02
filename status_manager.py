@@ -5,6 +5,9 @@ import ctypes
 import re
 
 STATUS_FILE_NAME = ".pnos_status.json"
+# Шаг 7 прошёл, но актов ГИ нет: здесь причина. Сам шаг (stage6) не
+# отмечается — повторный запуск подхватит пункт, когда акты появятся.
+GI_WAIT_KEY = "stage6_wait"
 
 def get_status_file_path(point_folder):
     return os.path.join(point_folder, STATUS_FILE_NAME)
