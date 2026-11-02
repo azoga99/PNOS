@@ -50,106 +50,6 @@ QLabel#section_label {
     font-size: 11px;
 }
 
-/* ─── Карточка шага конвейера ──────────────────────────────────── */
-QFrame#step_card {
-    background-color: @bg_panel@;
-    border: 1px solid @border@;
-    border-radius: 10px;
-}
-
-QFrame#step_card:hover {
-    border-color: @accent@;
-}
-
-QLabel#step_badge {
-    background-color: @border@;
-    color: @text_muted@;
-    border-radius: 15px;
-    font-size: 13px;
-    font-weight: 700;
-}
-
-QLabel#step_badge[status="run"] {
-    background-color: @accent@;
-    color: #ffffff;
-}
-
-QLabel#step_badge[status="done"] {
-    background-color: @success@;
-    color: #ffffff;
-}
-
-QLabel#step_badge[status="error"] {
-    background-color: @error@;
-    color: #ffffff;
-}
-
-QLabel#step_badge[status="wait"] {
-    background-color: @warn@;
-    color: #ffffff;
-}
-
-QLabel#step_title {
-    font-size: 13px;
-    font-weight: 700;
-    color: @text_primary@;
-}
-
-QLabel#step_summary {
-    font-size: 11px;
-    color: @text_muted@;
-}
-
-/* Вторичная: карточек семь, а основная (акцентная) кнопка на странице одна */
-QPushButton#step_action {
-    background-color: transparent;
-    color: @accent@;
-    border: 1px solid @border_strong@;
-    border-radius: 6px;
-    padding: 6px 16px;
-    font-size: 12px;
-    font-weight: 600;
-}
-
-QPushButton#step_action:hover {
-    background-color: @accent_soft@;
-    border-color: @accent@;
-}
-QPushButton#step_action:pressed { background-color: @accent_soft@; }
-QPushButton#step_action:disabled {
-    background-color: transparent;
-    border-color: @border@;
-    color: @text_faint@;
-}
-
-QPushButton#step_stop {
-    background-color: transparent;
-    color: @error@;
-    border: 1px solid @error@;
-    border-radius: 6px;
-    padding: 6px 14px;
-    font-size: 12px;
-    font-weight: 600;
-}
-
-QPushButton#step_stop:hover {
-    background-color: @error@;
-    color: #ffffff;
-}
-
-QProgressBar#step_progress {
-    border: none;
-    background-color: @border@;
-    border-radius: 2px;
-    min-height: 4px;
-    max-height: 4px;
-}
-
-QProgressBar#step_progress::chunk {
-    background-color: @accent@;
-    border-radius: 2px;
-}
-
 /* ─── Панель настроек ──────────────────────────────────────────── */
 #settings_panel {
     background-color: @bg_panel@;
@@ -540,17 +440,6 @@ QProgressBar::chunk {
     border-radius: 4px;
 }
 
-QProgressBar#global_progress {
-    background-color: @border@;
-    border-radius: 3px;
-    min-height: 6px;
-    max-height: 6px;
-}
-QProgressBar#global_progress::chunk {
-    background-color: @accent@;
-    border-radius: 3px;
-}
-
 /* ─── Скролл-бар ───────────────────────────────────────────────── */
 QScrollBar:vertical {
     background: transparent;
@@ -696,19 +585,6 @@ QLabel#rail_badge {
     padding: 0 3px;
     font-size: 9px;
     font-weight: 700;
-}
-
-/* ─── Строка хода прогона (общий прогресс + таймер) ────────────── */
-QLabel#global_caption {
-    color: @text_muted@;
-    font-weight: bold;
-    font-size: 11px;
-}
-
-QLabel#session_timer {
-    color: @accent@;
-    font-weight: 700;
-    font-size: 12px;
 }
 
 /* ─── Сегмент-переключатели (скорость / тема) ──────────────────── */

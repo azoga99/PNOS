@@ -15,7 +15,7 @@
 import re
 
 from PySide6.QtCore import Qt, Signal, QRect, QSize, QEvent
-from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QPixmap, QFontMetrics
+from PySide6.QtGui import QColor, QPainter, QPen, QPixmap, QFontMetrics
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
     QLineEdit, QStackedWidget, QTableWidget, QTableWidgetItem, QHeaderView,
@@ -201,6 +201,8 @@ class WorkspacePage(QWidget):
     open_form_requested = Signal(str)          # номер пункта
     stop_requested = Signal()
     refresh_requested = Signal()
+    reset_requested = Signal()                 # диалог сброса статуса пунктов
+    folder_requested = Signal()                # выбрать другую папку с пунктами
 
     LOG_EXPANDED_HEIGHT = 190
 
@@ -250,9 +252,18 @@ class WorkspacePage(QWidget):
         title = QLabel("Рабочее место")
         title.setObjectName("app_title")
         title_col.addWidget(title)
+        folder_row = QHBoxLayout()
+        folder_row.setSpacing(6)
         self.lbl_folder = ElidedLabel()
         self.lbl_folder.setObjectName("ws_folder")
-        title_col.addWidget(self.lbl_folder)
+        folder_row.addWidget(self.lbl_folder, 1)
+        self.btn_folder = QPushButton("Сменить")
+        self.btn_folder.setObjectName("ws_link")
+        self.btn_folder.setCursor(Qt.PointingHandCursor)
+        self.btn_folder.setToolTip("Выбрать другую папку с пунктами")
+        self.btn_folder.clicked.connect(self.folder_requested.emit)
+        folder_row.addWidget(self.btn_folder)
+        title_col.addLayout(folder_row)
         head.addLayout(title_col, 1)
 
         seg = QHBoxLayout()
@@ -340,6 +351,12 @@ class WorkspacePage(QWidget):
         self.btn_refresh.setToolTip("Перечитать состояние пунктов из папки")
         self.btn_refresh.clicked.connect(self.refresh_requested.emit)
         bar.addWidget(self.btn_refresh)
+        self.btn_reset = QPushButton("Сбросить…")
+        self.btn_reset.setObjectName("ws_secondary")
+        self.btn_reset.setCursor(Qt.PointingHandCursor)
+        self.btn_reset.setToolTip("Сбросить статус пункта или шага, чтобы выполнить его заново")
+        self.btn_reset.clicked.connect(self.reset_requested.emit)
+        bar.addWidget(self.btn_reset)
         bar.addSpacing(12)
         self.btn_run = QPushButton("")
         self.btn_run.setObjectName("ws_primary")
@@ -742,6 +759,8 @@ class WorkspacePage(QWidget):
             self.btn_run.style().polish(self.btn_run)
         self.btn_to_end.setEnabled(bool(n) and nxt is not None and not running)
         self.btn_add.setEnabled(not running)
+        self.btn_reset.setEnabled(not running)
+        self.btn_folder.setEnabled(not running)
         self.input_points.setEnabled(not running)
         self.btn_stop.setEnabled(running)
 

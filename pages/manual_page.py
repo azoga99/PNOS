@@ -102,10 +102,10 @@ class ManualPageMixin:
         sub.setWordWrap(True)
         head_col.addWidget(sub)
         head_row.addLayout(head_col, 1)
-        btn_back = QPushButton("К процессу")
+        btn_back = QPushButton("К пунктам")
         btn_back.setObjectName("ghost_button")
         btn_back.setCursor(Qt.PointingHandCursor)
-        btn_back.clicked.connect(lambda: self._switch_page(self.PAGE_PROCESS))
+        btn_back.clicked.connect(lambda: self._switch_page(self.PAGE_WORKSPACE))
         head_row.addWidget(btn_back, 0, Qt.AlignTop)
         outer.addLayout(head_row)
 
@@ -372,16 +372,6 @@ class ManualPageMixin:
                 "Пунктов нет",
                 "Форма заполняется после шагов 1–2: введите номера на "
                 "странице «Пункты» и запустите их.")
-
-        # Строка итога на карточке шага 3
-        filled = sum(1 for i in range(self.manual_point_list.count())
-                     if self.manual_point_list.item(i).data(Qt.UserRole + 1) in ("done", "filled"))
-        skipped = sum(1 for i in range(self.manual_point_list.count())
-                      if self.manual_point_list.item(i).data(Qt.UserRole + 1) == "skipped")
-        total = self.manual_point_list.count()
-        if total:
-            self.step_cards[3].set_summary(
-                f"Заполнено {filled} из {total}" + (f" · пропущено {skipped}" if skipped else ""))
 
         target = None
         for i in range(self.manual_point_list.count()):
@@ -738,7 +728,7 @@ class ManualPageMixin:
         worker.log.connect(self._append_log)
         worker.info.connect(lambda msg, cat: self._add_activity(3, msg, cat))
         worker.progress.connect(self.manual_progress.setValue)
-        worker.progress.connect(self.step_cards[3].set_progress)
+        worker.progress.connect(self._on_run_progress)
         worker.report_ready.connect(
             lambda d: self._store_stage_result(3, ["№ Пункта", "Записано", "Результат"], d))
         worker.finished_ok.connect(self._on_manual_written)
@@ -751,5 +741,5 @@ class ManualPageMixin:
         self.manual_btn_stop.setEnabled(False)
         self._load_manual_points()
         if success:
-            self._switch_page(self.PAGE_PROCESS)
+            self._switch_page(self.PAGE_WORKSPACE)
         self._on_step_finished(3, success)

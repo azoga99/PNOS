@@ -9,8 +9,8 @@ import os
 from PySide6.QtCore import Qt, Signal, QSettings
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QProgressBar, QLineEdit, QFileDialog, QCheckBox, QFrame,
-    QGroupBox, QScrollArea, QMessageBox, QApplication,
+    QProgressBar, QLineEdit, QFileDialog, QFrame,
+    QGroupBox, QScrollArea, QMessageBox,
     QListWidget, QListWidgetItem, QInputDialog
 )
 
@@ -19,10 +19,15 @@ import user_data
 # updater импортируется лениво (внутри методов), чтобы не тянуть requests при старте.
 
 
+def default_local_root() -> str:
+    return os.path.join(os.path.expanduser("~"), "Desktop", "ПНОС")
+
+
 class SettingsPage(QWidget):
     """Виджет страницы настроек программы."""
 
     theme_changed = Signal(str)  # 'light' / 'dark'
+    local_root_changed = Signal(str)  # другая папка пунктов
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -45,6 +50,30 @@ class SettingsPage(QWidget):
         scroll_layout = QVBoxLayout(scroll_widget)
         scroll_layout.setContentsMargins(0, 0, 10, 0)
         scroll_layout.setSpacing(25)
+
+        # ── Блок 0: Папка пунктов ────────────────────────────────
+        group_local = QGroupBox("Папка пунктов")
+        g_local_layout = QVBoxLayout(group_local)
+
+        local_box = QHBoxLayout()
+        self.edit_local = QLineEdit()
+        self.edit_local.setText(self._settings.value("local_root", "") or default_local_root())
+        self.edit_local.editingFinished.connect(self._apply_local_root)
+        btn_browse_local = QPushButton("📂 Выбрать")
+        btn_browse_local.setFixedWidth(110)
+        btn_browse_local.setCursor(Qt.PointingHandCursor)
+        btn_browse_local.clicked.connect(self.browse_local_root)
+        local_box.addWidget(self.edit_local)
+        local_box.addWidget(btn_browse_local)
+        g_local_layout.addLayout(local_box)
+
+        lbl_local_hint = QLabel("Сюда скачиваются пункты и здесь же создаются отчёты. "
+                                "Комплект можно положить в эту папку и вручную — "
+                                "программа возьмёт его как есть.")
+        lbl_local_hint.setObjectName("hint")
+        lbl_local_hint.setWordWrap(True)
+        g_local_layout.addWidget(lbl_local_hint)
+        scroll_layout.addWidget(group_local)
 
         # ── Блок 1: План-график ──────────────────────────────────
         group_paths = QGroupBox("План-график")
@@ -125,16 +154,6 @@ class SettingsPage(QWidget):
         g_upd_layout.addWidget(self.lbl_update_status)
 
         scroll_layout.addWidget(group_update)
-
-        # ── Блок 3: Автоматизация ────────────────────────────────
-        group_main = QGroupBox("Автоматизация")
-        g1_layout = QVBoxLayout(group_main)
-
-        self.chk_auto = QCheckBox("Автоматический режим (остановка только на ручном шаге 3)")
-        self.chk_auto.setChecked(True)
-        g1_layout.addWidget(self.chk_auto)
-
-        scroll_layout.addWidget(group_main)
 
         # ── Блок 4: Оформление ───────────────────────────────────
         group_theme = QGroupBox("Оформление")
@@ -223,6 +242,27 @@ class SettingsPage(QWidget):
         text = text.strip()
         if text:
             self._settings.setValue("master_excel", text)
+
+    def local_root(self) -> str:
+        """Папка пунктов; пустое поле — папка по умолчанию на рабочем столе."""
+        path = self.edit_local.text().strip()
+        if not path:
+            path = default_local_root()
+            self.edit_local.setText(path)
+        return path
+
+    def _apply_local_root(self):
+        path = self.local_root()
+        if path != self._settings.value("local_root", ""):
+            self._settings.setValue("local_root", path)
+            self.local_root_changed.emit(path)
+
+    def browse_local_root(self):
+        folder = QFileDialog.getExistingDirectory(self, "Папка пунктов", self.local_root())
+        if folder:
+            # QFileDialog отдаёт прямые слэши — Word COM такие пути не открывает
+            self.edit_local.setText(os.path.normpath(folder))
+            self._apply_local_root()
 
     def _browse_macro_path(self):
         """Выбор файла макроса."""

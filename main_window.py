@@ -2,11 +2,12 @@
 """
 Главное окно приложения ПНОС — PySide6.
 
-Здесь каркас окна (узкое боковое меню NavRail, строка хода прогона, стек
-страниц, тосты), сводный график и общие для всех страниц методы. Сами страницы — классы-примеси в pages/*_page.py:
-«Процесс» (карточки шагов и запуск этапов), «Ручной контроль» (шаг 3),
-«Обзор и отчёт», автономные «Правка отчётов» и «Анализ пунктов»;
-«Настройки» — отдельный виджет pages/settings_page.py.
+Здесь каркас окна (узкое боковое меню NavRail, стек страниц, тосты),
+сводный график и общие для всех страниц методы. Сами страницы — классы-примеси
+в pages/*_page.py: «Пункты» (рабочее место: запуск шагов, «До конца»),
+«Отчёт о прогоне» (вкладка рабочего места), «Ручной контроль» (шаг 3),
+автономные «Правка отчётов» и «Анализ пунктов»; «Настройки» — отдельный
+виджет pages/settings_page.py.
 """
 
 import os
@@ -16,19 +17,18 @@ from PySide6.QtCore import Qt, QSettings, QTimer, QThread, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QProgressBar, QFrame, QLineEdit, QFileDialog, QDialog, QApplication,
-    QStackedWidget, QListWidgetItem,
+    QFrame, QLineEdit, QFileDialog, QDialog, QApplication, QStackedWidget,
 )
 
 from config import CONFIG
 from utils import resource_path
 from version import APP_VERSION
 from pages.settings_page import SettingsPage
-from widgets import dot_icon, LOG_COLORS, NavRail
+from widgets import NavRail
 # Страницы — примеси к MainWindow (см. pages/*_page.py)
 from pages.process_page import ProcessPageMixin
 from pages.manual_page import ManualPageMixin
-from pages.overview_page import OverviewPageMixin
+from pages.report_page import RunReportMixin
 from pages.fixreports_page import FixReportsPageMixin
 from pages.analytics_page import AnalyticsPageMixin
 # Воркеры этапов импортируются лениво (внутри методов запуска),
@@ -143,25 +143,23 @@ class MasterScheduleDialog(QDialog):
         return self.edit_path.text().strip()
 
 
-class MainWindow(ProcessPageMixin, ManualPageMixin, OverviewPageMixin,
+class MainWindow(ProcessPageMixin, ManualPageMixin, RunReportMixin,
                  FixReportsPageMixin, AnalyticsPageMixin, QMainWindow):
     """Главное окно приложения ПНОС."""
 
     # Индексы страниц в QStackedWidget
-    PAGE_PROCESS = 0
+    PAGE_WORKSPACE = 0   # «Пункты»: таблица пунктов × шагов и «Отчёт о прогоне»
     PAGE_MANUAL = 1
-    PAGE_OVERVIEW = 2   # объединённая страница «Обзор и отчёт»
-    PAGE_FIXREPORTS = 3  # автономная «Правка отчётов» (вне конвейера)
-    PAGE_ANALYTICS = 4   # автономный «Анализ пунктов» (вне конвейера)
-    PAGE_SETTINGS = 5
+    PAGE_FIXREPORTS = 2  # автономная «Правка отчётов» (вне конвейера)
+    PAGE_ANALYTICS = 3   # автономный «Анализ пунктов» (вне конвейера)
+    PAGE_SETTINGS = 4
     # Отдельной страницы «Ремонт» нет: модуль живёт внутри «Ручного контроля»
     # (кнопка «Внести данные по ремонту» у пункта с ремонтом).
 
     # Боковое меню — единственное место, где перечислены его пункты:
     # (ключ, подпись, значок resources/icons/<значок>.svg, страница, внизу ли).
     NAV_ITEMS = [
-        ("points", "Пункты", "points", PAGE_PROCESS, False),
-        ("overview", "Обзор", "overview", PAGE_OVERVIEW, False),  # временно
+        ("points", "Пункты", "points", PAGE_WORKSPACE, False),
         ("form", "Форма", "form", PAGE_MANUAL, False),
         ("fix", "Правка", "fix", PAGE_FIXREPORTS, False),
         ("analytics", "Анализ", "analytics", PAGE_ANALYTICS, False),
@@ -184,16 +182,6 @@ class MainWindow(ProcessPageMixin, ManualPageMixin, OverviewPageMixin,
         7: "Вставка актов ГИ",
     }
 
-    STEP_DESCS = {
-        1: "Скачивание папок пунктов с Яндекс Диска и копирование шаблонов",
-        2: "Перенос таблицы №3 из «Акта замеров» на листы «Импорт»",
-        3: "Заполнение данных паспорта в форме — без ручного Excel",
-        4: "Перенос переменных из паспорта Word и запуск макросов Restore/Save",
-        5: "Слияние, спецификация, остаточный ресурс — финальный Word-отчёт",
-        6: "Вставка фотографий в отчёт по меткам [ФОТО]",
-        7: "Вставка актов гидроиспытаний по метке [ГИ] и пересчёт содержания",
-    }
-
     def __init__(self):
         super().__init__()
         self.setWindowTitle("ПНОС — Пакетный генератор отчётов")
@@ -202,7 +190,6 @@ class MainWindow(ProcessPageMixin, ManualPageMixin, OverviewPageMixin,
 
         self._workers = {}
         self._stage_results = {}     # {ui_step: {"columns": [...], "details": [...]} | dict}
-        self._completed_stages = set()
         self._start_time = None
         self._is_stopping = False
         self._step_started = {}      # ui_step -> time.time() старта
@@ -259,25 +246,24 @@ class MainWindow(ProcessPageMixin, ManualPageMixin, OverviewPageMixin,
         content_layout.setContentsMargins(24, 14, 24, 20)
         content_layout.setSpacing(10)
 
-        self._run_status = self._build_run_status()
-        content_layout.addWidget(self._run_status)
-
         self.pages_stack = QStackedWidget()
         content_layout.addWidget(self.pages_stack, 1)
+
+        # Настройки создаются первыми: из них остальные страницы берут папку
+        # пунктов (_get_local_root), а в стек они встают последними.
+        self.page_settings = SettingsPage()
+        self.page_settings.theme_changed.connect(self.apply_theme)
+        self.page_settings.local_root_changed.connect(self._on_local_root_changed)
 
         # Страницы (порядок = индексы PAGE_*). Страницы-формы держим читаемой
         # ширины по центру; страницы с таблицами занимают всю ширину.
         self.page_process = QWidget()
         self._setup_process_page()
-        self.pages_stack.addWidget(self._readable(self.page_process))
+        self.pages_stack.addWidget(self.page_process)
 
         self.page_manual = QWidget()
         self._setup_manual_page()
         self.pages_stack.addWidget(self.page_manual)
-
-        self.page_overview = QWidget()
-        self._setup_overview_page()
-        self.pages_stack.addWidget(self.page_overview)
 
         self.page_fixreports = QWidget()
         self._setup_fixreports_page()
@@ -287,45 +273,10 @@ class MainWindow(ProcessPageMixin, ManualPageMixin, OverviewPageMixin,
         self._setup_analytics_page()
         self.pages_stack.addWidget(self.page_analytics)
 
-        self.page_settings = SettingsPage()
         self.pages_stack.addWidget(self._readable(self.page_settings))
-        self.page_settings.theme_changed.connect(self.apply_theme)
 
         main_layout.addWidget(content_frame, 1)
-        self._switch_page(self.PAGE_PROCESS)
-
-    def _build_run_status(self) -> QWidget:
-        """
-        Строка хода прогона: «Общий прогресс», полоса и таймер сессии.
-
-        Методы страницы «Процесс» обращаются к self.global_progress и
-        self.lbl_session_timer напрямую, поэтому виджеты создаются здесь, а
-        строка временно стоит над стеком страниц (её место — шапка рабочего
-        места) и видна только на страницах прогона.
-        """
-        bar = QFrame()
-        bar.setObjectName("run_status")
-        row = QHBoxLayout(bar)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(10)
-        row.addStretch(1)
-        lbl_global = QLabel("Общий прогресс")
-        lbl_global.setObjectName("global_caption")
-        row.addWidget(lbl_global)
-        self.global_progress = QProgressBar()
-        self.global_progress.setObjectName("global_progress")
-        self.global_progress.setRange(0, 100)
-        self.global_progress.setValue(0)
-        self.global_progress.setFixedHeight(6)
-        self.global_progress.setTextVisible(False)
-        self.global_progress.setFixedWidth(200)
-        row.addWidget(self.global_progress)
-        self.lbl_session_timer = QLabel("")
-        self.lbl_session_timer.setObjectName("session_timer")
-        self.lbl_session_timer.setMinimumWidth(48)
-        self.lbl_session_timer.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        row.addWidget(self.lbl_session_timer)
-        return bar
+        self._switch_page(self.PAGE_WORKSPACE)
 
     def _readable(self, page: QWidget) -> QWidget:
         """Обёртка: страница не шире READABLE_WIDTH, по центру."""
@@ -373,10 +324,9 @@ class MainWindow(ProcessPageMixin, ManualPageMixin, OverviewPageMixin,
     def _switch_page(self, index: int):
         self.pages_stack.setCurrentIndex(index)
         self.nav_rail.set_current(self._nav_keys.get(index, ""))
-        self._run_status.setVisible(index in (self.PAGE_PROCESS, self.PAGE_OVERVIEW))
         self._update_nav_badges()
-        if index == self.PAGE_OVERVIEW:
-            self._refresh_overview()
+        if index == self.PAGE_WORKSPACE:
+            self._refresh_workspace()
             self._refresh_report_page()
         elif index == self.PAGE_MANUAL:
             self._load_manual_points()
@@ -441,11 +391,7 @@ class MainWindow(ProcessPageMixin, ManualPageMixin, OverviewPageMixin,
 
     def _add_activity(self, step: int, message: str, category: str = "info"):
         """Добавляет строку в единый журнал. step=0 — общесистемное сообщение."""
-        prefix = f"Шаг {step} · " if step else ""
-        item = QListWidgetItem(f"{prefix}{message}")
-        item.setIcon(dot_icon(LOG_COLORS.get(category, LOG_COLORS["info"])))
-        self.activity_list.addItem(item)
-        self.activity_list.scrollToBottom()
+        self.workspace.add_log(step, message, category)
         if category == "error":
             self._log_error(message)
 
@@ -471,30 +417,52 @@ class MainWindow(ProcessPageMixin, ManualPageMixin, OverviewPageMixin,
     # ═══════════════════════════════════════════════════════════════
 
     def _browse_local(self):
-        folder = QFileDialog.getExistingDirectory(self, "Выбрать папку")
-        if folder:
-            # QFileDialog отдаёт прямые слэши — Word COM такие пути не открывает
-            self.entry_local.setText(os.path.normpath(folder))
+        self.page_settings.browse_local_root()
 
     def _get_local_root(self) -> str:
-        path = self.entry_local.text().strip()
-        if not path:
-            desktop = os.path.join(os.path.expanduser("~"), "Desktop", "ПНОС")
-            self.entry_local.setText(desktop)
-            return desktop
-        return path
+        """Папка пунктов — поле в Настройках (запоминается между запусками)."""
+        return self.page_settings.local_root()
+
+    def _on_local_root_changed(self, path: str):
+        self._add_activity(0, f"Папка пунктов: {path}", "info")
+        self._refresh_workspace()
+        self._update_nav_badges()
+
+    def _scan_points(self):
+        """Сканирует локальную папку: [{name, invalid, missing, skipped, steps{}}]."""
+        import json
+        root = self._get_local_root()
+        result = []
+        if not root or not os.path.isdir(root):
+            return result
+        for name in sorted(os.listdir(root)):
+            folder = os.path.join(root, name)
+            if not os.path.isdir(folder):
+                continue
+            low = name.lower()
+            if not (low.startswith("п.") or low.startswith("п ") or low.startswith("пункт")):
+                continue
+            status_path = os.path.join(folder, ".pnos_status.json")
+            data = {}
+            if os.path.exists(status_path):
+                try:
+                    with open(status_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except Exception:
+                    data = {}
+            steps = {ui: bool(data.get(key, False))
+                     for ui, key in self.STEP_STATUS_KEYS.items()}
+            result.append({
+                "name": name,
+                "invalid": bool(data.get("invalid", False)) or ("не корректн" in low),
+                "missing": data.get("missing_folders", []),
+                "skipped": bool(data.get("skipped", False)),
+                "steps": steps,
+            })
+        return result
 
     def _tick_session_timer(self):
-        if not self._start_time:
-            return
-        elapsed = int(time.time() - self._start_time)
-        m, s = divmod(elapsed, 60)
-        h, m = divmod(m, 60)
-        self.lbl_session_timer.setText(
-            f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}")
-
-    def _update_global_progress(self):
-        self.global_progress.setValue(int(len(self._completed_stages) * (100.0 / 7.0)))
+        self._update_run_status()
 
     @staticmethod
     def _fmt_duration(seconds: int) -> str:

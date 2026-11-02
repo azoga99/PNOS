@@ -56,6 +56,23 @@ class AnalyticsPageMixin:
     # Страница «Анализ пунктов» — статистика готовности (вне конвейера)
     # ═══════════════════════════════════════════════════════════════
 
+    def _build_chip(self, caption: str, value_obj: str = "chip_value"):
+        """Компактный чип-сводка. Возвращает (frame, value_label)."""
+        box = QFrame()
+        box.setObjectName("stat_chip")
+        v = QVBoxLayout(box)
+        v.setContentsMargins(16, 7, 16, 7)
+        v.setSpacing(0)
+        val = QLabel("0")
+        val.setObjectName(value_obj)
+        val.setAlignment(Qt.AlignCenter)
+        cap = QLabel(caption)
+        cap.setObjectName("chip_caption")
+        cap.setAlignment(Qt.AlignCenter)
+        v.addWidget(val)
+        v.addWidget(cap)
+        return box, val
+
     def _setup_analytics_page(self):
         from widgets import NoWheelComboBox as QComboBox
 

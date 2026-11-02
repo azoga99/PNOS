@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Страница «Процесс»: карточки шагов, запуск этапов, принудительная остановка.
+Страница «Пункты» (рабочее место): запуск шагов, цепочка «До конца»,
+ход прогона, принудительная остановка.
+
+Сам виджет — pages/workspace_page.py: он только показывает и отдаёт
+намерения сигналами, а здесь они превращаются в запуск воркеров.
 
 Примесь к MainWindow: методы работают с тем же self, что и окно. Общее
 для всех страниц (_get_local_root, _add_activity, _switch_page, _workers)
@@ -12,110 +16,224 @@ import subprocess
 import time
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QGridLayout, QLabel, QPushButton, QFrame,
-    QLineEdit, QTextEdit, QMessageBox, QApplication, QListWidget,
-    QScrollArea,
-)
+from PySide6.QtWidgets import QVBoxLayout, QMessageBox, QApplication
 
-from widgets import StepCard
+from pages.workspace_page import WorkspacePage, plural_points
+from workspace_model import FORM_STEP, build_rows, next_step, point_number
 
 
 class ProcessPageMixin:
-    """Страница «Процесс»: карточки шагов, запуск этапов, принудительная остановка."""
+    """Страница «Пункты»: запуск шагов, цепочка «До конца», остановка."""
 
     # ═══════════════════════════════════════════════════════════════
-    # Страница «Процесс» — конвейер шагов
+    # Страница «Пункты» — рабочее место
     # ═══════════════════════════════════════════════════════════════
 
     def _setup_process_page(self):
         outer = QVBoxLayout(self.page_process)
         outer.setContentsMargins(0, 0, 0, 0)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        body = QWidget()
-        v = QVBoxLayout(body)
-        v.setContentsMargins(2, 2, 8, 2)
-        v.setSpacing(10)
-        scroll.setWidget(body)
-        outer.addWidget(scroll)
+        self.workspace = ws = WorkspacePage()
+        outer.addWidget(ws)
+        ws.add_points_requested.connect(self._ws_add_points)
+        ws.run_step_requested.connect(self._ws_run_step)
+        ws.run_to_end_requested.connect(self._ws_run_to_end)
+        ws.open_form_requested.connect(self._open_form_for)
+        ws.stop_requested.connect(self._force_stop_active_stage)
+        ws.refresh_requested.connect(self._refresh_workspace)
+        ws.reset_requested.connect(self._reset_point_dialog)
+        ws.folder_requested.connect(self._browse_local)
+        ws.btn_tab_report.clicked.connect(self._refresh_report_page)
+        self._setup_report_tab(ws.report_container)
 
-        v.addWidget(self._page_title("Процесс"))
+        self._run = None            # (UI-шаг, номера пунктов | None) — что идёт сейчас
+        self._run_progress = 0
+        self._step_summary = {}     # UI-шаг -> «Готово 3 из 4 · …» для журнала
+        self._chain = None          # пункты цепочки «До конца»; None — цепочки нет
+        self._chain_paused = []     # пункты, на которых цепочка ждёт формы
+        # Таблица перечитывается во время прогона, но не чаще раза в 1,5 с
+        self._ws_refresh_timer = QTimer(self)
+        self._ws_refresh_timer.setSingleShot(True)
+        self._ws_refresh_timer.setInterval(1500)
+        self._ws_refresh_timer.timeout.connect(self._refresh_workspace)
 
-        # ── Параметры запуска ──
-        params = QFrame()
-        params.setObjectName("settings_panel")
-        g = QGridLayout(params)
-        g.setContentsMargins(14, 12, 14, 12)
-        g.setHorizontalSpacing(10)
-        g.setVerticalSpacing(8)
+    def _refresh_workspace(self):
+        """Перечитывает пункты из папки; идущий шаг помечает точкой «идёт»."""
+        root = self._get_local_root()
+        rows = build_rows(root)
+        if self._run is not None:
+            step, points = self._run
+            for row in rows:
+                in_scope = points is None or row["point"] in points
+                if in_scope and row["steps"].get(step) not in ("done", "error"):
+                    row["steps"][step] = "run"
+        self.workspace.set_points(rows)
+        self.workspace.set_folder_info(root, len(rows))
+        self._update_run_status()
 
-        lbl_pts = QLabel("Пункты")
-        lbl_pts.setAlignment(Qt.AlignTop)
-        g.addWidget(lbl_pts, 0, 0)
-        self.text_manual = QTextEdit()
-        self.text_manual.setObjectName("manual_input")
-        self.text_manual.setPlaceholderText(
-            "Номера пунктов через пробел, запятую или с новой строки. Пример: 2758, 2759, 2760")
-        self.text_manual.setFixedHeight(56)
-        g.addWidget(self.text_manual, 0, 1, 1, 2)
+    def _update_run_status(self):
+        if self._run is None:
+            self.workspace.set_run_status(None, None, 0, "")
+            return
+        step, points = self._run
+        point = points[0] if points and len(points) == 1 else None
+        elapsed = self._fmt_duration(time.time() - self._start_time) if self._start_time else ""
+        self.workspace.set_run_status(step, point, self._run_progress, elapsed)
 
-        g.addWidget(QLabel("Локальная папка"), 1, 0)
-        self.entry_local = QLineEdit()
-        desktop = os.path.join(os.path.expanduser("~"), "Desktop", "ПНОС")
-        self.entry_local.setText(desktop)
-        g.addWidget(self.entry_local, 1, 1)
-        btn_browse = QPushButton("📂")
-        btn_browse.setObjectName("browse_btn")
-        btn_browse.setFixedWidth(40)
-        btn_browse.setCursor(Qt.PointingHandCursor)
-        btn_browse.clicked.connect(self._browse_local)
-        g.addWidget(btn_browse, 1, 2)
-        v.addWidget(params)
+    def _on_run_progress(self, value: int):
+        self._run_progress = value
+        self._update_run_status()
+        if not self._ws_refresh_timer.isActive():
+            self._ws_refresh_timer.start()
 
-        # ── Карточки шагов ──
-        self.step_cards = {}
-        actions = {
-            # Лямбды: сигнал кнопки не должен попасть в параметр points
-            1: lambda: self._start_stage1(), 2: lambda: self._start_stage2(),
-            3: lambda: self._switch_page(self.PAGE_MANUAL),
-            4: lambda: self._start_stage3(), 5: lambda: self._start_stage4(),
-            6: lambda: self._start_stage5(), 7: lambda: self._start_stage6(),
-        }
-        for step in range(1, 8):
-            card = StepCard(
-                step, self.STEP_TITLES[step], self.STEP_DESCS[step],
-                action_text="Заполнить форму" if step == 3 else "Запустить")
-            card.action_clicked.connect(actions[step])
-            card.stop_clicked.connect(self._force_stop_active_stage)
-            self.step_cards[step] = card
-            v.addWidget(card)
-
-        # ── Единый журнал ──
-        lbl_log = QLabel("Журнал")
-        lbl_log.setObjectName("section_label")
-        v.addWidget(lbl_log)
-        self.activity_list = QListWidget()
-        self.activity_list.setObjectName("activity_feed")
-        self.activity_list.setMinimumHeight(140)
-        v.addWidget(self.activity_list, 1)
+    def _start_session_clock(self):
+        self._start_time = time.time()
+        self._session_timer.start()
 
     # ═══════════════════════════════════════════════════════════════
-    # Управление шагами (карточками)
+    # Намерения рабочего места
     # ═══════════════════════════════════════════════════════════════
 
-    def _begin_step(self, step: int):
-        """Переводит карточку шага в состояние «выполняется»."""
-        card = self.step_cards[step]
-        card.set_status("run")
-        card.set_progress(0)
-        card.set_summary("Выполняется…")
-        if step == 4:
-            card.set_summary("Выполняется… Не открывайте другие файлы Excel и не перехватывайте фокус мыши")
+    def _is_running(self) -> bool:
+        return self._run is not None or self._chain is not None
+
+    def _ws_add_points(self, numbers: list):
+        if self._is_running():
+            return
+        self._stage_results = {}
+        self._start_session_clock()
+        self._start_stage1(points=numbers)
+
+    def _ws_run_step(self, step: int, points: list):
+        if self._is_running():
+            return
+        if step == FORM_STEP:
+            rows = {r["point"]: r for r in build_rows(self._get_local_root())}
+            waiting = [p for p in points
+                       if p in rows and rows[p]["steps"].get(FORM_STEP) != "done"]
+            self._open_form_for((waiting or points)[0])
+            return
+        self._start_session_clock()
+        self._launch_step(step, points)
+
+    def _launch_step(self, step: int, points: list):
+        starters = {1: self._start_stage1, 2: self._start_stage2,
+                    4: self._start_stage3, 5: self._start_stage4,
+                    6: self._start_stage5, 7: self._start_stage6}
+        starters[step](points=points)
+
+    def _open_form_for(self, point: str):
+        """Форма шага 3, сразу на нужном пункте."""
+        self._switch_page(self.PAGE_MANUAL)
+        lst = self.manual_point_list
+        for i in range(lst.count()):
+            item = lst.item(i)
+            folder = item.data(Qt.UserRole) or ""
+            if point_number(os.path.basename(os.path.normpath(folder))) == str(point):
+                if item.flags() & Qt.ItemIsEnabled:
+                    lst.setCurrentRow(i)
+                break
+
+    # ═══════════════════════════════════════════════════════════════
+    # Цепочка «До конца»
+    # ═══════════════════════════════════════════════════════════════
+
+    def _ws_run_to_end(self, points: list, resume: bool = False):
+        """
+        Шаг за шагом до седьмого для отмеченных пунктов. На ручном шаге 3
+        цепочка встаёт и открывает форму; после записи формы продолжается
+        сама. Пункт, у которого шаг не выполнился, выбывает из цепочки —
+        остальные идут дальше.
+        """
+        if self._is_running():
+            return
+        self._chain = [str(p) for p in points]
+        self._chain_paused = []
+        if not resume:
+            self._stage_results = {}
+        self._start_session_clock()
+        self.workspace.set_busy(True)
+        what = "продолжение" if resume else "запуск"
+        self._add_activity(0, f"«До конца», {what}: {plural_points(len(self._chain))}", "wait")
+        self._chain_next()
+
+    def _chain_rows(self) -> dict:
+        return {r["point"]: r for r in build_rows(self._get_local_root())}
+
+    def _chain_drop(self, point: str, step: int, reason: str):
+        if point in self._chain:
+            self._chain.remove(point)
+        self._add_activity(step, f"п.{point} выбыл из «До конца»: {reason}", "warn")
+
+    def _chain_next(self):
+        if self._chain is None:     # остановлено
+            return
+        rows = self._chain_rows()
+        pending = {}                # пункт -> его следующий шаг
+        for point in list(self._chain):
+            row = rows.get(point)
+            if row is None:
+                self._chain_drop(point, 0, "папка пункта не найдена")
+                continue
+            nxt = next_step(row["steps"])
+            if nxt is None:
+                self._chain.remove(point)
+            elif row["steps"].get(nxt) == "error":
+                state = row["state"] or "Пункт заблокирован"
+                self._chain_drop(point, nxt, state[:1].lower() + state[1:])
+            else:
+                pending[point] = nxt
+
+        # Пункты дальше формы не ждут тех, кто на форме стоит
+        movable = {p: s for p, s in pending.items() if s != FORM_STEP}
+        if movable:
+            step = min(movable.values())
+            self._launch_step(step, [p for p, s in movable.items() if s == step])
+            return
+
+        waiting = [p for p, s in pending.items() if s == FORM_STEP]
+        self._chain = None
+        self._session_timer.stop()
+        self.workspace.set_busy(False)
+        self._refresh_workspace()
+        if waiting:
+            self._chain_paused = waiting
+            names = ", ".join(f"п.{p}" for p in waiting)
+            self._add_activity(
+                FORM_STEP, f"Ждут формы: {names}. После записи формы «До конца» "
+                           "продолжится само", "wait")
+            self._open_form_for(waiting[0])
+        else:
+            self._add_activity(0, "«До конца» завершено", "done")
+            self.workspace.show_tab("report")
+            self._refresh_report_page()
+
+    def _chain_after_step(self, step: int, participants: list):
+        if self._chain is None:
+            return
+        rows = self._chain_rows()
+        for point in participants or []:
+            row = rows.get(point)
+            if row is None or row["steps"].get(step) != "done":
+                self._chain_drop(point, step, f"шаг {step} не выполнен, причина в журнале")
+        self._chain_next()
+
+    # ═══════════════════════════════════════════════════════════════
+    # Ход шага
+    # ═══════════════════════════════════════════════════════════════
+
+    def _begin_step(self, step: int, points: list | None = None):
+        """Отмечает начало шага: блок прогона, точки «идёт», блокировка кнопок."""
+        self._run = (step, [str(p) for p in points] if points else None)
+        self._run_progress = 0
         self._step_started[step] = time.time()
+        if not self._session_timer.isActive():
+            self._start_session_clock()
+        self.workspace.set_busy(True)
+        self._refresh_workspace()
+        if step == 4:
+            self._add_activity(4, "Не открывайте другие файлы Excel и не перехватывайте "
+                                  "фокус мыши, пока идут макросы", "warn")
 
     def _summarize_details(self, details: list):
         """Считает (готово, ошибки, пропущено) по списку строк-результатов."""
@@ -133,10 +251,10 @@ class ProcessPageMixin:
         return done, errors, skipped
 
     def _store_stage_result(self, step: int, columns: list, details: list):
-        """Сохраняет результат этапа для страницы «Итоговый отчёт» и карточки."""
+        """Сохраняет результат этапа для вкладки «Отчёт о прогоне» и журнала."""
         self._stage_results[step] = {"columns": columns, "details": details}
         done, errors, skipped = self._summarize_details(details)
-        parts = [f"Готово {done} из {len(details)}"]
+        parts = [f"готово {done} из {len(details)}"]
         if errors:
             parts.append(f"ошибок {errors}")
         if skipped:
@@ -144,65 +262,55 @@ class ProcessPageMixin:
         started = self._step_started.get(step)
         if started:
             parts.append(self._fmt_duration(time.time() - started))
-        self.step_cards[step].set_summary(" · ".join(parts))
+        self._step_summary[step] = " · ".join(parts)
 
     def _on_step_finished(self, step: int, success: bool):
-        """Общее завершение шага: карточка, авто-цепочка, обзор."""
-        card = self.step_cards[step]
-        card.set_status("done" if success else "error")
+        """Общее завершение шага: журнал, таблица, цепочка «До конца»."""
+        run, self._run = self._run, None
+        summary = self._step_summary.pop(step, "")
         if success:
-            self._completed_stages.add(step)
-            self._add_activity(step, "Этап завершён", "done")
+            self._add_activity(step, "Шаг завершён" + (f": {summary}" if summary else ""), "done")
         else:
-            self._add_activity(step, "Этап завершён с ошибками", "error")
-        self._update_global_progress()
+            self._add_activity(step, "Шаг завершён с ошибками"
+                               + (f": {summary}" if summary else ""), "error")
+        self._ws_refresh_timer.stop()
         self._update_nav_badges()
 
-        if success:
-            if step >= 7:
-                # Конвейер завершён — показываем вкладку «Отчёт о прогоне»
-                self._session_timer.stop()
-                self._switch_page(self.PAGE_OVERVIEW)
-                self._set_overview_tab(1)
-                return
-            next_step = step + 1
-            if self.page_settings.chk_auto.isChecked():
-                if next_step == 3:
-                    # Ручной шаг: подсветить и открыть форму
-                    self.step_cards[3].set_status("wait")
-                    self.step_cards[3].set_summary("Заполните форму и запишите данные в Excel")
-                    self._switch_page(self.PAGE_MANUAL)
-                else:
-                    QTimer.singleShot(800, self.step_cards[next_step].btn_action.click)
+        if self._chain is not None:
+            self._refresh_workspace()
+            participants = run[1] if run else []
+            QTimer.singleShot(800, lambda: self._chain_after_step(step, participants))
+            return
+
+        self._session_timer.stop()
+        self.workspace.set_busy(False)
+        self._refresh_workspace()
+
+        if step == FORM_STEP and success and self._chain_paused:
+            points, self._chain_paused = self._chain_paused, []
+            self._switch_page(self.PAGE_WORKSPACE)
+            QTimer.singleShot(800, lambda: self._ws_run_to_end(points, resume=True))
 
     # ═══════════════════════════════════════════════════════════════
     # Запуск этапов
     # ═══════════════════════════════════════════════════════════════
 
     def _start_stage1(self, points: list[str] | None = None):
-        """points — номера пунктов; None — берутся из поля ввода номеров."""
+        """points — номера пунктов (строки из поля «Добавить»)."""
         local_root = self._get_local_root()
 
-        if points is None:
-            import re
-            raw_points = re.findall(r"\d+", self.text_manual.toPlainText())
-        else:
-            raw_points = [str(p).strip() for p in points]
         manual_points = []
-        for p in raw_points:
-            if p not in manual_points:
+        for p in points or []:
+            p = str(p).strip()
+            if p and p not in manual_points:
                 manual_points.append(p)
         if not manual_points:
             QMessageBox.warning(self, "Ошибка", "Укажите хотя бы один номер пункта.")
             return
 
-        self._start_time = time.time()
-        self._session_timer.start()
-        self._stage_results = {}
-        self._begin_step(1)
-        self._add_activity(1, f"Запуск: {len(manual_points)} пунктов", "wait")
+        self._begin_step(1, manual_points)
+        self._add_activity(1, f"Запуск: {plural_points(len(manual_points))}", "wait")
 
-        card = self.step_cards[1]
         from workers.stage1_worker import Stage1Worker
         # «Стар. ЭПБ» ищется всегда (её отсутствие не блокирует пункт),
         # скорость сети всегда максимальная.
@@ -211,7 +319,7 @@ class ProcessPageMixin:
             need_epb=True, max_threads=10, parent=self)
         worker.log.connect(self._append_log)
         worker.info.connect(lambda msg, cat: self._add_activity(1, msg, cat))
-        worker.progress.connect(card.set_progress)
+        worker.progress.connect(self._on_run_progress)
         worker.report_ready.connect(self._on_stage1_report)
         worker.finished_ok.connect(lambda ok: self._on_step_finished(1, ok))
         worker.start()
@@ -236,82 +344,55 @@ class ProcessPageMixin:
                    "Исполнит.", "Акт отбр.", "Результат"]
         self._store_stage_result(1, columns, details)
 
+    def _start_worker(self, ui_step: int, key: str, worker, columns: list):
+        """Общая обвязка воркеров этапов 2, 4–7."""
+        worker.log.connect(self._append_log)
+        worker.info.connect(lambda msg, cat: self._add_activity(ui_step, msg, cat))
+        worker.progress.connect(self._on_run_progress)
+        worker.report_ready.connect(
+            lambda d: self._store_stage_result(ui_step, columns, d))
+        worker.finished_ok.connect(lambda ok: self._on_step_finished(ui_step, ok))
+        worker.start()
+        self._workers[key] = worker
+
     def _start_stage2(self, points: list[str] | None = None):
         local_root = self._get_local_root()
-        self._begin_step(2)
-        card = self.step_cards[2]
+        self._begin_step(2, points)
         from workers.stage2_worker import Stage2Worker
         worker = Stage2Worker(local_root, parent=self, points=points)
-        worker.log.connect(self._append_log)
-        worker.info.connect(lambda msg, cat: self._add_activity(2, msg, cat))
-        worker.progress.connect(card.set_progress)
-        worker.report_ready.connect(
-            lambda d: self._store_stage_result(2, ["№ Пункта", "Акт найден", "Таблица 3 найдена", "Результат"], d))
-        worker.finished_ok.connect(lambda ok: self._on_step_finished(2, ok))
-        worker.start()
-        self._workers["stage2"] = worker
+        self._start_worker(2, "stage2", worker,
+                           ["№ Пункта", "Акт найден", "Таблица 3 найдена", "Результат"])
 
     def _start_stage3(self, points: list[str] | None = None):
         local_root = self._get_local_root()
-        self._begin_step(4)
-        card = self.step_cards[4]
+        self._begin_step(4, points)
         macro_path = self.page_settings.edit_macro_path.text().strip() or None
         from workers.stage3_worker import Stage3Worker
         worker = Stage3Worker(local_root, macro_master_path=macro_path, parent=self,
                               points=points)
-        worker.log.connect(self._append_log)
-        worker.info.connect(lambda msg, cat: self._add_activity(4, msg, cat))
-        worker.progress.connect(card.set_progress)
-        worker.report_ready.connect(
-            lambda d: self._store_stage_result(4, ["№ Пункта", "Паспорт", "Excel", "Результат"], d))
-        worker.finished_ok.connect(lambda ok: self._on_step_finished(4, ok))
-        worker.start()
-        self._workers["stage3"] = worker
+        self._start_worker(4, "stage3", worker, ["№ Пункта", "Паспорт", "Excel", "Результат"])
 
     def _start_stage4(self, points: list[str] | None = None):
         local_root = self._get_local_root()
-        self._begin_step(5)
-        card = self.step_cards[5]
+        self._begin_step(5, points)
         from workers.stage4_worker import Stage4Worker
         worker = Stage4Worker(local_root, parent=self, points=points)
-        worker.log.connect(self._append_log)
-        worker.info.connect(lambda msg, cat: self._add_activity(5, msg, cat))
-        worker.progress.connect(card.set_progress)
-        worker.report_ready.connect(
-            lambda d: self._store_stage_result(5, ["№ Пункта", "Макрос Excel", "Слияние Word", "Результат"], d))
-        worker.finished_ok.connect(lambda ok: self._on_step_finished(5, ok))
-        worker.start()
-        self._workers["stage4"] = worker
+        self._start_worker(5, "stage4", worker,
+                           ["№ Пункта", "Макрос Excel", "Слияние Word", "Результат"])
 
     def _start_stage5(self, points: list[str] | None = None):
         local_root = self._get_local_root()
-        self._begin_step(6)
-        card = self.step_cards[6]
+        self._begin_step(6, points)
         from workers.stage5_worker import Stage5Worker
         worker = Stage5Worker(local_root, parent=self, points=points)
-        worker.log.connect(self._append_log)
-        worker.info.connect(lambda msg, cat: self._add_activity(6, msg, cat))
-        worker.progress.connect(card.set_progress)
-        worker.report_ready.connect(
-            lambda d: self._store_stage_result(6, ["№ Пункта", "Фото", "Результат"], d))
-        worker.finished_ok.connect(lambda ok: self._on_step_finished(6, ok))
-        worker.start()
-        self._workers["stage5"] = worker
+        self._start_worker(6, "stage5", worker, ["№ Пункта", "Фото", "Результат"])
 
     def _start_stage6(self, points: list[str] | None = None):
         local_root = self._get_local_root()
-        self._begin_step(7)
-        card = self.step_cards[7]
+        self._begin_step(7, points)
         from workers.stage6_worker import Stage6Worker
         worker = Stage6Worker(local_root, parent=self, points=points)
-        worker.log.connect(self._append_log)
-        worker.info.connect(lambda msg, cat: self._add_activity(7, msg, cat))
-        worker.progress.connect(card.set_progress)
-        worker.report_ready.connect(
-            lambda d: self._store_stage_result(7, ["№ Пункта", "Акты ГИ", "Результат"], d))
-        worker.finished_ok.connect(lambda ok: self._on_step_finished(7, ok))
-        worker.start()
-        self._workers["stage6"] = worker
+        self._start_worker(7, "stage6", worker, ["№ Пункта", "Акты ГИ", "Результат"])
 
     # ═══════════════════════════════════════════════════════════════
     # Принудительная остановка
@@ -324,6 +405,9 @@ class ProcessPageMixin:
         try:
             self._append_log("\n🛑 ПРИНУДИТЕЛЬНАЯ ОСТАНОВКА ПОЛЬЗОВАТЕЛЕМ...")
             self._add_activity(0, "Принудительная остановка", "warn")
+            # Цепочка не должна подхватить «завершение» остановленного шага
+            self._chain = None
+            self._chain_paused = []
 
             for worker in list(self._workers.values()):
                 if worker:
@@ -348,10 +432,10 @@ class ProcessPageMixin:
                     pass
 
             self._session_timer.stop()
-            for card in self.step_cards.values():
-                if card.status() == "run":
-                    card.set_status("idle")
-                    card.reset_summary()
+            self._ws_refresh_timer.stop()
+            self._run = None
+            self.workspace.set_busy(False)
+            self._refresh_workspace()
             # Кнопка записи на форме шага 3
             if hasattr(self, "manual_btn_write"):
                 self.manual_btn_write.setEnabled(True)
