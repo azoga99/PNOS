@@ -932,3 +932,247 @@ QLabel#toast {
     font-size: 13px;
     font-weight: 600;
 }
+
+
+/* ═══ Рабочее место (pages/workspace_page.py) ═══ */
+QLabel#ws_folder {
+    font-size: 12px;
+    color: @text_muted@;
+}
+
+/* Переключатель «Пункты / Отчёт о прогоне» — две половины одной кнопки */
+QPushButton#ws_tab {
+    background-color: @bg_panel@;
+    border: 1px solid @border_strong@;
+    padding: 7px 16px;
+    color: @text_secondary@;
+    font-size: 12px;
+    font-weight: 600;
+}
+QPushButton#ws_tab[side="left"] {
+    border-top-left-radius: 7px;
+    border-bottom-left-radius: 7px;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    border-right: none;
+}
+QPushButton#ws_tab[side="right"] {
+    border-top-right-radius: 7px;
+    border-bottom-right-radius: 7px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+}
+QPushButton#ws_tab:hover { background-color: @bg_panel_alt@; color: @text_primary@; }
+QPushButton#ws_tab:checked {
+    background-color: @accent@;
+    border-color: @accent@;
+    color: #ffffff;
+}
+
+/* Блок прогона */
+QFrame#ws_run {
+    background-color: @bg_panel@;
+    border: 1px solid @border@;
+    border-radius: 8px;
+}
+QLabel#ws_run_title {
+    font-size: 12px;
+    font-weight: 600;
+    color: @text_faint@;
+}
+QLabel#ws_run_title[active="true"] { color: @text_primary@; }
+QLabel#ws_run_timer {
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: @text_secondary@;
+}
+QProgressBar#ws_run_progress {
+    background-color: @border@;
+    border-radius: 2px;
+    min-height: 4px;
+    max-height: 4px;
+}
+QProgressBar#ws_run_progress::chunk {
+    background-color: @accent@;
+    border-radius: 2px;
+}
+QPushButton#ws_stop {
+    background-color: transparent;
+    border: 1px solid @error@;
+    border-radius: 6px;
+    padding: 6px 14px;
+    color: @error@;
+    font-weight: 700;
+}
+QPushButton#ws_stop:hover { background-color: @error@; color: #ffffff; }
+QPushButton#ws_stop:pressed { background-color: @error_strong@; color: #ffffff; }
+QPushButton#ws_stop:disabled {
+    background-color: transparent;
+    border-color: @border@;
+    color: @text_faint@;
+}
+
+/* Строка шагов */
+QFrame#ws_step_chip {
+    background-color: @bg_panel@;
+    border: 1px solid @border@;
+    border-radius: 7px;
+}
+QFrame#ws_step_chip[status="run"] { border-color: @accent@; }
+QLabel#ws_step_num {
+    font-size: 12px;
+    font-weight: 800;
+    color: @text_muted@;
+}
+QLabel#ws_step_name {
+    font-size: 12px;
+    font-weight: 600;
+    color: @text_primary@;
+}
+QLabel#ws_step_count {
+    font-size: 11px;
+    color: @text_faint@;
+}
+
+/* Панель запуска */
+QLineEdit#ws_input { padding: 7px 10px; }
+QPushButton#ws_secondary {
+    background-color: @bg_panel@;
+    border: 1px solid @border_strong@;
+    border-radius: 7px;
+    padding: 7px 14px;
+    color: @text_secondary@;
+}
+QPushButton#ws_secondary:hover { border-color: @accent@; color: @accent@; }
+QPushButton#ws_secondary:disabled {
+    background-color: @bg_panel_alt@;
+    border-color: @border@;
+    color: @text_faint@;
+}
+QPushButton#ws_primary {
+    background-color: @accent@;
+    border: 1px solid @accent@;
+    border-radius: 7px;
+    padding: 7px 18px;
+    color: #ffffff;
+    font-weight: 700;
+}
+QPushButton#ws_primary:hover { background-color: @accent_hover@; border-color: @accent_hover@; }
+QPushButton#ws_primary:pressed { background-color: @accent_press@; border-color: @accent_press@; }
+QPushButton#ws_primary:disabled {
+    background-color: @bg_panel_alt@;
+    border: 1px solid @border@;
+    color: @text_faint@;
+}
+QPushButton#ws_primary[hint="true"]:disabled {
+    border: 1px dashed @border_strong@;
+    color: @text_muted@;
+}
+
+/* Таблица пунктов */
+QTableWidget#ws_table {
+    border-radius: 8px;
+    font-size: 13px;
+}
+QTableWidget#ws_table::item {
+    padding: 0 10px;
+    border-bottom: 1px solid @border@;
+}
+QTableWidget#ws_table QHeaderView::section {
+    padding: 7px 10px;
+    font-size: 11px;
+}
+QTableWidget#ws_table::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid @border_strong@;
+    border-radius: 4px;
+    background-color: @bg_input@;
+}
+QTableWidget#ws_table::indicator:checked {
+    background-color: @accent@;
+    border-color: @accent@;
+}
+QCheckBox#ws_check_all { spacing: 0; }
+QCheckBox#ws_check_all::indicator { width: 16px; height: 16px; }
+QCheckBox#ws_check_all::indicator:indeterminate {
+    background-color: @selection@;
+    border: 2px solid @accent@;
+}
+QLabel#ws_state {
+    background: transparent;
+    font-size: 12px;
+    font-weight: 600;
+    color: @ws_state_info@;
+}
+QLabel#ws_state[kind="info"]  { color: @ws_state_info@; font-weight: 400; }
+QLabel#ws_state[kind="done"]  { color: @ws_state_done@; }
+QLabel#ws_state[kind="warn"]  { color: @ws_state_warn@; }
+QLabel#ws_state[kind="error"] { color: @ws_state_error@; }
+
+QFrame#ws_empty {
+    background-color: @bg_panel@;
+    border: 1px dashed @border_strong@;
+    border-radius: 8px;
+}
+QLabel#ws_empty_title {
+    font-size: 15px;
+    font-weight: 700;
+    color: @text_primary@;
+}
+QLabel#ws_empty_text {
+    font-size: 12px;
+    color: @text_muted@;
+}
+
+QLabel#ws_legend {
+    font-size: 11px;
+    color: @text_muted@;
+}
+
+/* Журнал: свёрнут в строку, раскрывается списком */
+QFrame#ws_log {
+    background-color: @bg_panel@;
+    border: 1px solid @border@;
+    border-radius: 8px;
+}
+QLabel#ws_log_caption {
+    font-size: 11px;
+    font-weight: 700;
+    color: @text_muted@;
+}
+QLabel#ws_log_last {
+    font-size: 12px;
+    color: @text_secondary@;
+}
+QLabel#ws_log_last[empty="true"] { color: @text_faint@; }
+QLabel#ws_log_count {
+    font-size: 11px;
+    color: @text_faint@;
+}
+QPushButton#ws_link {
+    background-color: transparent;
+    border: none;
+    padding: 2px 4px;
+    color: @accent@;
+    font-weight: 600;
+}
+QPushButton#ws_link:hover { color: @accent_press@; text-decoration: underline; }
+QListWidget#ws_log_list {
+    background-color: @bg_panel_alt@;
+    border: 1px solid @border@;
+    border-radius: 6px;
+    padding: 4px;
+    font-size: 11px;
+    color: @text_secondary@;
+    outline: none;
+}
+QListWidget#ws_log_list::item {
+    padding: 2px 4px;
+    border: none;
+}
+QListWidget#ws_log_list::item:selected {
+    background-color: @bg_panel@;
+    color: @text_primary@;
+}

@@ -69,6 +69,11 @@ LIGHT = {
     "chip_fixed_fg": "#b45309",
     "chip_changed_bg": "#e2e8f0",
     "chip_changed_fg": "#475569",
+    # Рабочее место
+    "ws_state_info": "#64748b",
+    "ws_state_done": "#15803d",
+    "ws_state_warn": "#b45309",
+    "ws_state_error": "#dc2626",
 }
 
 DARK = {
@@ -122,6 +127,11 @@ DARK = {
     "chip_fixed_fg": "#fbbf24",
     "chip_changed_bg": "#334155",
     "chip_changed_fg": "#cbd5e1",
+    # Рабочее место
+    "ws_state_info": "#94a3b8",
+    "ws_state_done": "#34d399",
+    "ws_state_warn": "#fbbf24",
+    "ws_state_error": "#f87171",
 }
 
 PALETTES = {"light": LIGHT, "dark": DARK}
