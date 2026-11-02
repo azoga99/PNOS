@@ -79,10 +79,11 @@ class ProcessPageMixin:
         # ── Карточки шагов ──
         self.step_cards = {}
         actions = {
-            1: self._start_stage1, 2: self._start_stage2,
+            # Лямбды: сигнал кнопки не должен попасть в параметр points
+            1: lambda: self._start_stage1(), 2: lambda: self._start_stage2(),
             3: lambda: self._switch_page(self.PAGE_MANUAL),
-            4: self._start_stage3, 5: self._start_stage4,
-            6: self._start_stage5, 7: self._start_stage6,
+            4: lambda: self._start_stage3(), 5: lambda: self._start_stage4(),
+            6: lambda: self._start_stage5(), 7: lambda: self._start_stage6(),
         }
         for step in range(1, 8):
             card = StepCard(
@@ -177,11 +178,15 @@ class ProcessPageMixin:
     # Запуск этапов
     # ═══════════════════════════════════════════════════════════════
 
-    def _start_stage1(self):
+    def _start_stage1(self, points: list[str] | None = None):
+        """points — номера пунктов; None — берутся из поля ввода номеров."""
         local_root = self._get_local_root()
 
-        import re
-        raw_points = re.findall(r"\d+", self.text_manual.toPlainText())
+        if points is None:
+            import re
+            raw_points = re.findall(r"\d+", self.text_manual.toPlainText())
+        else:
+            raw_points = [str(p).strip() for p in points]
         manual_points = []
         for p in raw_points:
             if p not in manual_points:
@@ -230,12 +235,12 @@ class ProcessPageMixin:
                    "Исполнит.", "Акт отбр.", "Результат"]
         self._store_stage_result(1, columns, details)
 
-    def _start_stage2(self):
+    def _start_stage2(self, points: list[str] | None = None):
         local_root = self._get_local_root()
         self._begin_step(2)
         card = self.step_cards[2]
         from workers.stage2_worker import Stage2Worker
-        worker = Stage2Worker(local_root, parent=self)
+        worker = Stage2Worker(local_root, parent=self, points=points)
         worker.log.connect(self._append_log)
         worker.info.connect(lambda msg, cat: self._add_activity(2, msg, cat))
         worker.progress.connect(card.set_progress)
@@ -245,13 +250,14 @@ class ProcessPageMixin:
         worker.start()
         self._workers["stage2"] = worker
 
-    def _start_stage3(self):
+    def _start_stage3(self, points: list[str] | None = None):
         local_root = self._get_local_root()
         self._begin_step(4)
         card = self.step_cards[4]
         macro_path = self.page_settings.edit_macro_path.text().strip() or None
         from workers.stage3_worker import Stage3Worker
-        worker = Stage3Worker(local_root, macro_master_path=macro_path, parent=self)
+        worker = Stage3Worker(local_root, macro_master_path=macro_path, parent=self,
+                              points=points)
         worker.log.connect(self._append_log)
         worker.info.connect(lambda msg, cat: self._add_activity(4, msg, cat))
         worker.progress.connect(card.set_progress)
@@ -261,12 +267,12 @@ class ProcessPageMixin:
         worker.start()
         self._workers["stage3"] = worker
 
-    def _start_stage4(self):
+    def _start_stage4(self, points: list[str] | None = None):
         local_root = self._get_local_root()
         self._begin_step(5)
         card = self.step_cards[5]
         from workers.stage4_worker import Stage4Worker
-        worker = Stage4Worker(local_root, parent=self)
+        worker = Stage4Worker(local_root, parent=self, points=points)
         worker.log.connect(self._append_log)
         worker.info.connect(lambda msg, cat: self._add_activity(5, msg, cat))
         worker.progress.connect(card.set_progress)
@@ -276,12 +282,12 @@ class ProcessPageMixin:
         worker.start()
         self._workers["stage4"] = worker
 
-    def _start_stage5(self):
+    def _start_stage5(self, points: list[str] | None = None):
         local_root = self._get_local_root()
         self._begin_step(6)
         card = self.step_cards[6]
         from workers.stage5_worker import Stage5Worker
-        worker = Stage5Worker(local_root, parent=self)
+        worker = Stage5Worker(local_root, parent=self, points=points)
         worker.log.connect(self._append_log)
         worker.info.connect(lambda msg, cat: self._add_activity(6, msg, cat))
         worker.progress.connect(card.set_progress)
@@ -291,12 +297,12 @@ class ProcessPageMixin:
         worker.start()
         self._workers["stage5"] = worker
 
-    def _start_stage6(self):
+    def _start_stage6(self, points: list[str] | None = None):
         local_root = self._get_local_root()
         self._begin_step(7)
         card = self.step_cards[7]
         from workers.stage6_worker import Stage6Worker
-        worker = Stage6Worker(local_root, parent=self)
+        worker = Stage6Worker(local_root, parent=self, points=points)
         worker.log.connect(self._append_log)
         worker.info.connect(lambda msg, cat: self._add_activity(7, msg, cat))
         worker.progress.connect(card.set_progress)

@@ -10,7 +10,6 @@
 """
 
 import os
-import re
 import shutil
 import asyncio
 from datetime import datetime
@@ -23,19 +22,10 @@ from config import CONFIG
 from yandex_api import YandexDiskAPI
 from excel_service import analyze_excel
 from status_manager import (get_stage_status, set_stage_status, get_status_value,
-                            reset_stage_status)
+                            reset_stage_status, point_number_of)
 
 # Копия шаблонов внутри ПНОС. Этапы 2–7 берут только папки «п.*», её не тронут
 TEMPLATE_CACHE = "_шаблоны"
-
-# «п.3186», «п. 3186», «П.3186», «пункт 3186», «3186», «п.3186 (не корректный)»
-_POINT_DIR = re.compile(r"^\s*(?:(?:пункт|п)\.?\s*)?(\d+)(?!\d)", re.IGNORECASE)
-
-
-def point_number_of(dirname: str) -> str | None:
-    """Номер пункта из имени папки или None, если имя на пункт не похоже."""
-    m = _POINT_DIR.match(dirname)
-    return m.group(1) if m else None
 
 
 def _has_files(folder: str) -> bool:

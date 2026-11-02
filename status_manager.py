@@ -2,6 +2,7 @@
 import os
 import json
 import ctypes
+import re
 
 STATUS_FILE_NAME = ".pnos_status.json"
 
@@ -156,3 +157,65 @@ def is_point_blocked(point_folder):
             return True, "пропущен пользователем"
     return False, ""
 
+
+
+# ─── Папки пунктов ───────────────────────────────────────────────
+
+# «п.3186», «п. 3186», «П.3186», «пункт 3186», «3186», «п.3186 (не корректный)»
+_POINT_DIR = re.compile(r"^\s*(?:(?:пункт|п)\.?\s*)?(\d+)(?!\d)", re.IGNORECASE)
+
+# Этапы 2–7 берут только папки «п.*»: так в ПНОС не попадают _шаблоны и _gi_cache
+POINT_DIR_PREFIX = "п."
+
+
+def point_number_of(dirname: str) -> str | None:
+    """Номер пункта из имени папки или None, если имя на пункт не похоже."""
+    m = _POINT_DIR.match(dirname)
+    return m.group(1) if m else None
+
+
+def _normalize_points(points) -> list[str]:
+    """Номера без повторов; «п.3186» и « 3186 » сводятся к «3186»."""
+    out = []
+    for p in points:
+        raw = str(p).strip()
+        num = point_number_of(raw) or raw
+        if num and num not in out:
+            out.append(num)
+    return out
+
+
+def select_point_folders(local_root: str, points=None) -> list[str]:
+    """
+    Папки пунктов в local_root, которые перебирают этапы 2–7: подпапки, чьё имя
+    начинается с «п.», в порядке os.listdir. Если points задан (номера-строки) —
+    только папки с этими номерами; points=None — все пункты, [] — ни одного.
+    Заблокированные пункты не отсеиваются: их пропускает сам этап, со своим
+    сообщением. Нет папки local_root — пустой список.
+    """
+    try:
+        names = os.listdir(local_root)
+    except OSError:
+        return []
+    wanted = None if points is None else set(_normalize_points(points))
+    folders = []
+    for d in names:
+        dpath = os.path.join(local_root, d)
+        if not (os.path.isdir(dpath) and d.startswith(POINT_DIR_PREFIX)):
+            continue
+        if wanted is not None and point_number_of(d) not in wanted:
+            continue
+        folders.append(dpath)
+    return folders
+
+
+def missing_points(folders: list[str], points) -> list[str]:
+    """Номера из points, для которых среди folders нет папки."""
+    found = {point_number_of(os.path.basename(f)) for f in folders}
+    return [p for p in _normalize_points(points) if p not in found]
+
+
+def no_selected_points_message(points) -> str:
+    """Текст для журнала, когда среди выбранных пунктов нет ни одной папки."""
+    nums = ", ".join(f"п.{p}" for p in _normalize_points(points)) or "список пуст"
+    return f"Выбранных пунктов нет в папке ПНОС ({nums})"

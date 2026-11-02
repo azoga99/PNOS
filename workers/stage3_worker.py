@@ -25,6 +25,7 @@ import win32con
 from config import CONFIG
 from status_manager import (
     get_stage_status, set_stage_status, is_point_blocked, reset_stage_status,
+    missing_points, no_selected_points_message, select_point_folders,
 )
 from excel_service import (
     PlanLookupError, build_plan_index, plan_key, read_point_f9, resolve_plan_number,
@@ -209,9 +210,12 @@ class Stage3Worker(QThread):
     finished_ok = Signal(bool)    # Завершение (True = успех)
     info = Signal(str, str)       # Дружелюбный статус (сообщение, категория)
 
-    def __init__(self, local_root: str, macro_master_path: str = None, parent=None):
+    def __init__(self, local_root: str, macro_master_path: str = None, parent=None, *,
+                 points: list[str] | None = None):
         super().__init__(parent)
         self.local_root = local_root
+        # Номера пунктов для обработки; None — все пункты папки ПНОС
+        self.points = list(points) if points is not None else None
         self.macro_master_path = macro_master_path
         self._is_cancelled = False
 
@@ -296,16 +300,22 @@ class Stage3Worker(QThread):
         macro_cfg = CONFIG.get("MACRO_CONFIG", {})
 
         # Ищем все папки пунктов "п.*"
-        point_folders = []
-        for d in os.listdir(self.local_root):
-            dpath = os.path.join(self.local_root, d)
-            if os.path.isdir(dpath) and d.startswith("п."):
-                point_folders.append(dpath)
+        point_folders = select_point_folders(self.local_root, self.points)
 
         if not point_folders:
-            self.log.emit("⚠ Не найдено локальных папок пунктов (п.*).")
+            if self.points is not None:
+                msg = no_selected_points_message(self.points)
+                self.log.emit(f"⚠ {msg}")
+                self.info.emit(msg, "warn")
+            else:
+                self.log.emit("⚠ Не найдено локальных папок пунктов (п.*).")
             self.finished_ok.emit(False)
             return
+        if self.points is not None:
+            lost = missing_points(point_folders, self.points)
+            if lost:
+                self.log.emit("⚠ Нет папок для выбранных пунктов: "
+                              + ", ".join(f"п.{p}" for p in lost))
 
         self.log.emit(f"📋 Найдено пунктов для обработки: {len(point_folders)}")
         self.progress.emit(5)

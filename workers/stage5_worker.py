@@ -6,7 +6,9 @@ import tempfile
 import re
 from PIL import Image
 from PySide6.QtCore import QThread, Signal
-from status_manager import get_stage_status, set_stage_status, is_point_blocked
+from status_manager import (get_stage_status, set_stage_status, is_point_blocked,
+                            missing_points, no_selected_points_message,
+                            select_point_folders)
 from workers.stage4_worker import find_report_file
 
 def is_cell_red(cell):
@@ -27,9 +29,12 @@ class Stage5Worker(QThread):
     action_update = Signal(str)
     report_ready = Signal(list)
 
-    def __init__(self, local_root: str, parent=None):
+    def __init__(self, local_root: str, parent=None, *,
+                 points: list[str] | None = None):
         super().__init__(parent)
         self.local_root = local_root
+        # Номера пунктов для обработки; None — все пункты папки ПНОС
+        self.points = list(points) if points is not None else None
         self._is_cancelled = False
 
     def cancel(self):
@@ -84,13 +89,22 @@ class Stage5Worker(QThread):
             self.finished_ok.emit(False)
             return
 
-        point_folders = [os.path.join(self.local_root, d) for d in os.listdir(self.local_root) 
-                        if os.path.isdir(os.path.join(self.local_root, d)) and d.startswith("п.")]
+        point_folders = select_point_folders(self.local_root, self.points)
 
         if not point_folders:
-            self.log.emit("⚠ Папки пунктов не найдены.")
+            if self.points is not None:
+                msg = no_selected_points_message(self.points)
+                self.log.emit(f"⚠ {msg}")
+                self.info.emit(msg, "warn")
+            else:
+                self.log.emit("⚠ Папки пунктов не найдены.")
             self.finished_ok.emit(False)
             return
+        if self.points is not None:
+            lost = missing_points(point_folders, self.points)
+            if lost:
+                self.log.emit("⚠ Нет папок для выбранных пунктов: "
+                              + ", ".join(f"п.{p}" for p in lost))
 
         pythoncom.CoInitialize()
         wd_app = None
