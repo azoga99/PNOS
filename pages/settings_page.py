@@ -92,7 +92,7 @@ class SettingsPage(QWidget):
 
         upd_btn_row = QHBoxLayout()
         self.btn_check_update = QPushButton("Проверить обновления")
-        self.btn_check_update.setObjectName("blue_button")
+        self.btn_check_update.setObjectName("card_button")
         self.btn_check_update.setCursor(Qt.PointingHandCursor)
         self.btn_check_update.clicked.connect(self._check_for_updates)
         upd_btn_row.addWidget(self.btn_check_update)
@@ -106,7 +106,7 @@ class SettingsPage(QWidget):
         g_upd_layout.addLayout(upd_btn_row)
 
         self.btn_install_update = QPushButton("Установить и перезапустить")
-        self.btn_install_update.setObjectName("green_button")
+        self.btn_install_update.setObjectName("card_button")
         self.btn_install_update.setCursor(Qt.PointingHandCursor)
         self.btn_install_update.clicked.connect(self._install_update)
         self.btn_install_update.setVisible(False)

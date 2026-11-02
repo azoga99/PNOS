@@ -211,7 +211,7 @@ class RepairPage(QWidget):
         btn_browse.clicked.connect(self._browse)
         g.addWidget(btn_browse, 0, 2)
         self.btn_scan = QPushButton("Проверить пункт")
-        self.btn_scan.setObjectName("green_button")
+        self.btn_scan.setObjectName("card_button")
         self.btn_scan.setCursor(Qt.PointingHandCursor)
         self.btn_scan.clicked.connect(self._start_scan)
         g.addWidget(self.btn_scan, 0, 3)
@@ -462,7 +462,7 @@ class RepairPage(QWidget):
 
         row3 = QHBoxLayout()
         self.btn_apply = QPushButton("Применить выбранное")
-        self.btn_apply.setObjectName("green_button")
+        self.btn_apply.setObjectName("card_button")
         self.btn_apply.setCursor(Qt.PointingHandCursor)
         self.btn_apply.setEnabled(False)
         self.btn_apply.clicked.connect(self._apply)
@@ -605,7 +605,7 @@ class RepairPage(QWidget):
         side.addWidget(self.lbl_map_clean)
 
         self.btn_map_save = QPushButton("Сохранить карту (с бэкапом)")
-        self.btn_map_save.setObjectName("green_button")
+        self.btn_map_save.setObjectName("card_button")
         self.btn_map_save.setCursor(Qt.PointingHandCursor)
         self.btn_map_save.setEnabled(False)
         self.btn_map_save.clicked.connect(self._map_save)

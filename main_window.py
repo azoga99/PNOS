@@ -2,8 +2,8 @@
 """
 Главное окно приложения ПНОС — PySide6.
 
-Здесь каркас окна (боковое меню, стек страниц, тосты), сводный график и
-общие для всех страниц методы. Сами страницы — классы-примеси в pages/*_page.py:
+Здесь каркас окна (узкое боковое меню NavRail, строка хода прогона, стек
+страниц, тосты), сводный график и общие для всех страниц методы. Сами страницы — классы-примеси в pages/*_page.py:
 «Процесс» (карточки шагов и запуск этапов), «Ручной контроль» (шаг 3),
 «Обзор и отчёт», автономные «Правка отчётов» и «Анализ пунктов»;
 «Настройки» — отдельный виджет pages/settings_page.py.
@@ -24,7 +24,7 @@ from config import CONFIG
 from utils import resource_path
 from version import APP_VERSION
 from pages.settings_page import SettingsPage
-from widgets import dot_icon, LOG_COLORS
+from widgets import dot_icon, LOG_COLORS, NavRail
 # Страницы — примеси к MainWindow (см. pages/*_page.py)
 from pages.process_page import ProcessPageMixin
 from pages.manual_page import ManualPageMixin
@@ -105,12 +105,12 @@ class MasterScheduleDialog(QDialog):
         btns = QHBoxLayout()
         btns.addStretch()
         btn_later = QPushButton("Позже")
-        btn_later.setObjectName("segment")
+        btn_later.setObjectName("ghost_button")
         btn_later.setCursor(Qt.PointingHandCursor)
         btn_later.clicked.connect(self.reject)
         btns.addWidget(btn_later)
         self.btn_ok = QPushButton("Использовать этот график")
-        self.btn_ok.setObjectName("green_button")
+        self.btn_ok.setObjectName("card_button")
         self.btn_ok.setCursor(Qt.PointingHandCursor)
         self.btn_ok.setEnabled(False)
         self.btn_ok.clicked.connect(self.accept)
@@ -156,6 +156,19 @@ class MainWindow(ProcessPageMixin, ManualPageMixin, OverviewPageMixin,
     PAGE_SETTINGS = 5
     # Отдельной страницы «Ремонт» нет: модуль живёт внутри «Ручного контроля»
     # (кнопка «Внести данные по ремонту» у пункта с ремонтом).
+
+    # Боковое меню — единственное место, где перечислены его пункты:
+    # (ключ, подпись, значок resources/icons/<значок>.svg, страница, внизу ли).
+    NAV_ITEMS = [
+        ("points", "Пункты", "points", PAGE_PROCESS, False),
+        ("overview", "Обзор", "overview", PAGE_OVERVIEW, False),  # временно
+        ("form", "Форма", "form", PAGE_MANUAL, False),
+        ("fix", "Правка", "fix", PAGE_FIXREPORTS, False),
+        ("analytics", "Анализ", "analytics", PAGE_ANALYTICS, False),
+        ("settings", "Настройки", "settings", PAGE_SETTINGS, True),
+    ]
+    # Ширина страниц-форм на широком мониторе (таблицы занимают всю ширину)
+    READABLE_WIDTH = 1000
 
     # UI-шаг -> ключ статуса в .pnos_status.json (учитывает сдвиг воркеров)
     STEP_STATUS_KEYS = {1: "stage1", 2: "stage2", 3: "manual3",
@@ -221,101 +234,42 @@ class MainWindow(ProcessPageMixin, ManualPageMixin, OverviewPageMixin,
         main_layout.setSpacing(0)
         main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # ─── Сайдбар ───────────────────────────────────────────────
-        sidebar = QFrame()
-        sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(230)
-        sb = QVBoxLayout(sidebar)
-        sb.setContentsMargins(0, 0, 0, 0)
-        sb.setSpacing(0)
-
-        logo_frame = QFrame()
-        logo_frame.setObjectName("logo_frame")
-        logo_layout = QVBoxLayout(logo_frame)
-        logo_layout.setContentsMargins(20, 26, 20, 26)
-        app_title = QLabel("ПНОС")
-        app_title.setObjectName("sidebar_title")
-        logo_layout.addWidget(app_title)
-        app_sub = QLabel(f"Версия {APP_VERSION}")
-        app_sub.setObjectName("sidebar_subtitle")
-        logo_layout.addWidget(app_sub)
-        sb.addWidget(logo_frame)
-
-        nav_specs = [
-            ("Процесс", self.PAGE_PROCESS),
-            ("Ручной контроль", self.PAGE_MANUAL),
-            ("Обзор и отчёт", self.PAGE_OVERVIEW),
-            ("Правка отчётов", self.PAGE_FIXREPORTS),
-            ("Анализ пунктов", self.PAGE_ANALYTICS),
-        ]
-        self._nav_buttons = {}
-        nav_box = QVBoxLayout()
-        nav_box.setContentsMargins(0, 12, 0, 0)
-        nav_box.setSpacing(2)
-        for caption, page_idx in nav_specs:
-            btn = QPushButton(caption)
-            btn.setObjectName("nav_button")
-            btn.setCheckable(True)
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.clicked.connect(lambda checked, i=page_idx: self._switch_page(i))
-            self._nav_buttons[page_idx] = btn
-            nav_box.addWidget(btn)
-        nav_holder = QWidget()
-        nav_holder.setLayout(nav_box)
-        sb.addWidget(nav_holder)
-        sb.addStretch()
-
-        btn_settings = QPushButton("Настройки")
-        btn_settings.setObjectName("nav_button")
-        btn_settings.setCheckable(True)
-        btn_settings.setCursor(Qt.PointingHandCursor)
-        btn_settings.clicked.connect(lambda: self._switch_page(self.PAGE_SETTINGS))
-        self._nav_buttons[self.PAGE_SETTINGS] = btn_settings
-        sb.addWidget(btn_settings)
-        sb.addSpacing(8)
-
-        # Общий прогресс + таймер
-        prog_holder = QWidget()
-        pv = QVBoxLayout(prog_holder)
-        pv.setContentsMargins(20, 8, 20, 22)
-        head_row = QHBoxLayout()
-        lbl_global = QLabel("Общий прогресс")
-        lbl_global.setObjectName("global_caption")
-        head_row.addWidget(lbl_global)
-        head_row.addStretch()
-        self.lbl_session_timer = QLabel("")
-        self.lbl_session_timer.setObjectName("session_timer")
-        head_row.addWidget(self.lbl_session_timer)
-        pv.addLayout(head_row)
-        self.global_progress = QProgressBar()
-        self.global_progress.setObjectName("global_progress")
-        self.global_progress.setRange(0, 100)
-        self.global_progress.setValue(0)
-        self.global_progress.setFixedHeight(10)
-        self.global_progress.setTextVisible(False)
-        pv.addWidget(self.global_progress)
-        sb.addWidget(prog_holder)
-
-        main_layout.addWidget(sidebar)
+        # ─── Боковое меню ──────────────────────────────────────────
+        self.nav_rail = NavRail(
+            resource_path(os.path.join("resources", "icon_mark.png")),
+            f"ПНОС, версия {APP_VERSION}")
+        self._nav_keys = {}   # индекс страницы -> ключ пункта меню
+        nav_pages = {}
+        for key, caption, icon_name, page_idx, bottom in self.NAV_ITEMS:
+            if bottom:
+                self.nav_rail.add_bottom_item(key, caption, icon_name)
+            else:
+                self.nav_rail.add_item(key, caption, icon_name)
+            self._nav_keys[page_idx] = key
+            nav_pages[key] = page_idx
+        self.nav_rail.item_clicked.connect(
+            lambda key: self._switch_page(nav_pages[key]))
+        self.nav_rail.recolor(self._palette())
+        main_layout.addWidget(self.nav_rail)
 
         # ─── Контент ───────────────────────────────────────────────
         content_frame = QFrame()
         content_frame.setObjectName("content_frame")
         content_layout = QVBoxLayout(content_frame)
-        content_layout.setContentsMargins(24, 20, 24, 20)
+        content_layout.setContentsMargins(24, 14, 24, 20)
+        content_layout.setSpacing(10)
 
-        wrapper = QHBoxLayout()
-        wrapper.addStretch()
+        self._run_status = self._build_run_status()
+        content_layout.addWidget(self._run_status)
+
         self.pages_stack = QStackedWidget()
-        self.pages_stack.setMaximumWidth(1000)
-        wrapper.addWidget(self.pages_stack, 1)
-        wrapper.addStretch()
-        content_layout.addLayout(wrapper)
+        content_layout.addWidget(self.pages_stack, 1)
 
-        # Страницы (порядок = индексы PAGE_*)
+        # Страницы (порядок = индексы PAGE_*). Страницы-формы держим читаемой
+        # ширины по центру; страницы с таблицами занимают всю ширину.
         self.page_process = QWidget()
         self._setup_process_page()
-        self.pages_stack.addWidget(self.page_process)
+        self.pages_stack.addWidget(self._readable(self.page_process))
 
         self.page_manual = QWidget()
         self._setup_manual_page()
@@ -327,23 +281,100 @@ class MainWindow(ProcessPageMixin, ManualPageMixin, OverviewPageMixin,
 
         self.page_fixreports = QWidget()
         self._setup_fixreports_page()
-        self.pages_stack.addWidget(self.page_fixreports)
+        self.pages_stack.addWidget(self._readable(self.page_fixreports))
 
         self.page_analytics = QWidget()
         self._setup_analytics_page()
         self.pages_stack.addWidget(self.page_analytics)
 
         self.page_settings = SettingsPage()
-        self.pages_stack.addWidget(self.page_settings)
+        self.pages_stack.addWidget(self._readable(self.page_settings))
         self.page_settings.theme_changed.connect(self.apply_theme)
 
-        main_layout.addWidget(content_frame)
+        main_layout.addWidget(content_frame, 1)
         self._switch_page(self.PAGE_PROCESS)
+
+    def _build_run_status(self) -> QWidget:
+        """
+        Строка хода прогона: «Общий прогресс», полоса и таймер сессии.
+
+        Методы страницы «Процесс» обращаются к self.global_progress и
+        self.lbl_session_timer напрямую, поэтому виджеты создаются здесь, а
+        строка временно стоит над стеком страниц (её место — шапка рабочего
+        места) и видна только на страницах прогона.
+        """
+        bar = QFrame()
+        bar.setObjectName("run_status")
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(10)
+        row.addStretch(1)
+        lbl_global = QLabel("Общий прогресс")
+        lbl_global.setObjectName("global_caption")
+        row.addWidget(lbl_global)
+        self.global_progress = QProgressBar()
+        self.global_progress.setObjectName("global_progress")
+        self.global_progress.setRange(0, 100)
+        self.global_progress.setValue(0)
+        self.global_progress.setFixedHeight(6)
+        self.global_progress.setTextVisible(False)
+        self.global_progress.setFixedWidth(200)
+        row.addWidget(self.global_progress)
+        self.lbl_session_timer = QLabel("")
+        self.lbl_session_timer.setObjectName("session_timer")
+        self.lbl_session_timer.setMinimumWidth(48)
+        self.lbl_session_timer.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        row.addWidget(self.lbl_session_timer)
+        return bar
+
+    def _readable(self, page: QWidget) -> QWidget:
+        """Обёртка: страница не шире READABLE_WIDTH, по центру."""
+        page.setMaximumWidth(self.READABLE_WIDTH)
+        holder = QWidget()
+        h = QHBoxLayout(holder)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(0)
+        h.addStretch()
+        h.addWidget(page, 1)
+        h.addStretch()
+        return holder
+
+    def _palette(self) -> dict:
+        from theme import get_palette
+        return get_palette(self._theme_name)
+
+    def _update_nav_badges(self):
+        """
+        Счётчик на «Форме»: сколько пунктов в папке ПНОС ждут ручного шага 3 —
+        таблицы скопированы (stage2), форма не записана (manual3), пункт не
+        «не корректный» и не пропущен.
+        """
+        from status_manager import get_stage_status, is_point_blocked
+        root = self._get_local_root()
+        waiting = 0
+        try:
+            names = os.listdir(root) if os.path.isdir(root) else []
+        except OSError:
+            names = []
+        for name in names:
+            low = name.lower()
+            if not (low.startswith("п.") or low.startswith("п ")
+                    or low.startswith("пункт")):
+                continue
+            folder = os.path.join(root, name)
+            if not os.path.isdir(folder):
+                continue
+            if (get_stage_status(folder, "stage2")
+                    and not get_stage_status(folder, "manual3")
+                    and not is_point_blocked(folder)[0]):
+                waiting += 1
+        self.nav_rail.set_badge("form", waiting)
 
     def _switch_page(self, index: int):
         self.pages_stack.setCurrentIndex(index)
-        for idx, btn in self._nav_buttons.items():
-            btn.setChecked(idx == index)
+        self.nav_rail.set_current(self._nav_keys.get(index, ""))
+        self._run_status.setVisible(index in (self.PAGE_PROCESS, self.PAGE_OVERVIEW))
+        self._update_nav_badges()
         if index == self.PAGE_OVERVIEW:
             self._refresh_overview()
             self._refresh_report_page()
@@ -479,3 +510,4 @@ class MainWindow(ProcessPageMixin, ManualPageMixin, OverviewPageMixin,
         app = QApplication.instance()
         if app:
             app.setStyleSheet(build_stylesheet(self._theme_name))
+        self.nav_rail.recolor(self._palette())

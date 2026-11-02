@@ -100,20 +100,25 @@ QLabel#step_summary {
     color: @text_muted@;
 }
 
+/* Вторичная: карточек семь, а основная (акцентная) кнопка на странице одна */
 QPushButton#step_action {
-    background-color: @accent@;
-    color: #ffffff;
-    border: none;
+    background-color: transparent;
+    color: @accent@;
+    border: 1px solid @border_strong@;
     border-radius: 6px;
-    padding: 7px 16px;
+    padding: 6px 16px;
     font-size: 12px;
     font-weight: 600;
 }
 
-QPushButton#step_action:hover { background-color: @accent_hover@; }
-QPushButton#step_action:pressed { background-color: @accent_press@; }
+QPushButton#step_action:hover {
+    background-color: @accent_soft@;
+    border-color: @accent@;
+}
+QPushButton#step_action:pressed { background-color: @accent_soft@; }
 QPushButton#step_action:disabled {
-    background-color: @border@;
+    background-color: transparent;
+    border-color: @border@;
     color: @text_faint@;
 }
 
@@ -536,10 +541,14 @@ QProgressBar::chunk {
 }
 
 QProgressBar#global_progress {
-    background-color: @dark_panel_border@;
+    background-color: @border@;
+    border-radius: 3px;
+    min-height: 6px;
+    max-height: 6px;
 }
 QProgressBar#global_progress::chunk {
-    background-color: @teal@;
+    background-color: @accent@;
+    border-radius: 3px;
 }
 
 /* ─── Скролл-бар ───────────────────────────────────────────────── */
@@ -650,65 +659,54 @@ QHeaderView::section:last {
     border-right: none;
 }
 
-/* ─── Сайдбар ──────────────────────────────────────────────────── */
-QFrame#sidebar {
-    background-color: @bg_sidebar@;
-    border-right: 1px solid @bg_sidebar_logo@;
+/* ─── Боковое меню (NavRail) ───────────────────────────────────── */
+QFrame#nav_rail {
+    background-color: @bg_rail@;
+    border: none;
+    border-right: 1px solid @border@;
 }
 
-QFrame#logo_frame {
-    background-color: @bg_sidebar_logo@;
-}
-
-QLabel#sidebar_title {
-    color: #ffffff;
-    font-size: 24px;
-    font-weight: 800;
-    letter-spacing: 1px;
-}
-
-QLabel#sidebar_subtitle {
-    color: @teal@;
-    font-size: 11px;
-    font-weight: 800;
-}
-
-QPushButton#nav_button {
+QToolButton#rail_item {
     background-color: transparent;
     border: none;
-    border-radius: 0;
-    border-left: 4px solid transparent;
-    color: @sidebar_text@;
-    text-align: left;
-    padding: 11px 16px 11px 20px;
-    font-size: 13px;
+    border-radius: 8px;
+    color: @rail_text@;
+    font-size: 10px;
     font-weight: 600;
+    padding: 7px 0 5px 0;
 }
 
-QPushButton#nav_button:hover {
-    background-color: @bg_sidebar_hover@;
-    color: @sidebar_text_hover@;
+QToolButton#rail_item:hover {
+    background-color: @bg_rail_hover@;
+    color: @rail_text_hover@;
 }
 
-QPushButton#nav_button:checked {
-    background-color: @teal@;
-    color: #0f172a;
-    border-left: 4px solid @teal_dark@;
+QToolButton#rail_item:checked {
+    background-color: @accent_soft@;
+    color: @accent@;
     font-weight: 700;
 }
 
-QPushButton#nav_button:disabled {
-    color: @sidebar_muted@;
+/* Счётчик в углу значка (сколько пунктов ждут ручного шага 3) */
+QLabel#rail_badge {
+    background-color: @accent@;
+    color: #ffffff;
+    border: 2px solid @bg_rail@;
+    border-radius: 9px;
+    padding: 0 3px;
+    font-size: 9px;
+    font-weight: 700;
 }
 
+/* ─── Строка хода прогона (общий прогресс + таймер) ────────────── */
 QLabel#global_caption {
-    color: @sidebar_text@;
+    color: @text_muted@;
     font-weight: bold;
     font-size: 11px;
 }
 
 QLabel#session_timer {
-    color: @teal@;
+    color: @accent@;
     font-weight: 700;
     font-size: 12px;
 }
@@ -774,6 +772,24 @@ QListWidget#activity_feed::item:selected {
     background-color: @bg_panel_alt@;
     color: @text_primary@;
     border-radius: 4px;
+}
+
+/* ─── Пустое состояние (EmptyState) — подсказка вместо пустого списка ── */
+QFrame#empty_state {
+    background-color: @bg_panel@;
+    border: 1px solid @border@;
+    border-radius: 8px;
+}
+
+QLabel#empty_title {
+    color: @text_secondary@;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+QLabel#empty_text {
+    color: @text_muted@;
+    font-size: 12px;
 }
 
 /* ─── Список пунктов (форма ручного контроля / обзор) ──────────── */

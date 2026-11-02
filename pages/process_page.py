@@ -156,6 +156,7 @@ class ProcessPageMixin:
         else:
             self._add_activity(step, "Этап завершён с ошибками", "error")
         self._update_global_progress()
+        self._update_nav_badges()
 
         if success:
             if step >= 7:

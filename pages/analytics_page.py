@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import CONFIG
-from widgets import dot_icon, LOG_COLORS
+from widgets import dot_icon, LOG_COLORS, EmptyState
 
 
 # Статусы согласования на странице «Анализ пунктов».
@@ -142,7 +142,12 @@ class AnalyticsPageMixin:
         self.an_list.setObjectName("activity_feed")
         self.an_list.setSelectionMode(QListWidget.ExtendedSelection)
         self.an_list.itemChanged.connect(self._an_item_changed)
-        sv.addWidget(self.an_list, 1)
+        self.an_list_box = EmptyState(
+            self.an_list, "График ещё не прочитан",
+            "Программа читает сводный график сама при запуске. Если сервер "
+            "недоступен, укажите файл графика в «Настройках» и нажмите "
+            "«Перечитать график».")
+        sv.addWidget(self.an_list_box, 1)
 
         sel_row = QHBoxLayout()
         sel_row.setSpacing(6)
@@ -160,7 +165,7 @@ class AnalyticsPageMixin:
         sel_row.addWidget(self.an_lbl_counter)
         sel_row.addStretch()
         self.an_btn_start = QPushButton("Проверить на Я.Диске")
-        self.an_btn_start.setObjectName("green_button")
+        self.an_btn_start.setObjectName("card_button")
         self.an_btn_start.setCursor(Qt.PointingHandCursor)
         self.an_btn_start.setEnabled(False)
         self.an_btn_start.clicked.connect(self._an_start_scan)
@@ -185,7 +190,7 @@ class AnalyticsPageMixin:
             chips_row.addWidget(c)
         chips_row.addStretch()
         self.an_btn_export = QPushButton("Выгрузить в Word")
-        self.an_btn_export.setObjectName("segment")
+        self.an_btn_export.setObjectName("ghost_button")
         self.an_btn_export.setCursor(Qt.PointingHandCursor)
         self.an_btn_export.setEnabled(False)
         self.an_btn_export.clicked.connect(self._an_export_word)
@@ -203,7 +208,11 @@ class AnalyticsPageMixin:
         header = self.an_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Stretch)
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        rv.addWidget(self.an_table, 1)
+        self.an_table_box = EmptyState(
+            self.an_table, "Результатов пока нет",
+            "Отметьте пункты на вкладке «Выбор пунктов» и нажмите «Проверить "
+            "на Я.Диске» — здесь появится, каких папок у пунктов не хватает.")
+        rv.addWidget(self.an_table_box, 1)
         self.an_tabs.addWidget(tab_res)
 
         # ── Низ: статус + остановка + прогресс ──
@@ -214,7 +223,7 @@ class AnalyticsPageMixin:
         self.an_lbl_status.setObjectName("hint")
         bottom.addWidget(self.an_lbl_status, 1)
         self.an_btn_stop = QPushButton("Остановить")
-        self.an_btn_stop.setObjectName("segment")
+        self.an_btn_stop.setObjectName("ghost_button")
         self.an_btn_stop.setCursor(Qt.PointingHandCursor)
         self.an_btn_stop.setEnabled(False)
         self.an_btn_stop.clicked.connect(self._an_stop_scan)
@@ -247,6 +256,11 @@ class AnalyticsPageMixin:
         path = self._master_excel_path()
         if not path or not os.path.isfile(path):
             self.an_lbl_file.setText("График не найден")
+            if not self._an_rows:
+                self.an_list_box.show_hint(
+                    "Сводный график не найден",
+                    "Укажите файл графика в «Настройках» (блок «План-график»), "
+                    "затем нажмите «Перечитать график».")
             self._an_set_status(
                 "Не найден мастер-файл сводного графика — укажите его "
                 "на странице «Настройки»", "error")
@@ -255,6 +269,10 @@ class AnalyticsPageMixin:
             f"График: {os.path.basename(path)} (мастер-файл из Настроек)")
         self.an_btn_reload.setEnabled(False)
         self._an_loaded_path = path
+        if not self._an_rows:
+            self.an_list_box.show_hint(
+                "Читаю сводный график…",
+                "Обычно это несколько секунд. Список пунктов появится здесь.")
 
         from workers.analytics_worker import ScheduleLoadWorker
         worker = ScheduleLoadWorker(path, parent=self)
@@ -268,12 +286,22 @@ class AnalyticsPageMixin:
     def _an_on_load_finished(self, success: bool):
         self.an_btn_reload.setEnabled(True)
         self._workers.pop("an_load", None)
+        if not success and not self._an_rows:
+            self.an_list_box.show_hint(
+                "Не удалось прочитать график",
+                "Причина — в строке состояния внизу страницы. Проверьте файл "
+                "и нажмите «Перечитать график».")
 
     def _an_on_rows(self, rows: list):
         self._an_rows = rows
         self._an_checked.clear()
         self._an_fill_equipment()
         self._an_refresh_list()
+        if not rows:
+            self.an_list_box.show_hint(
+                "В графике нет пунктов",
+                "В прочитанном файле не нашлось ни одной строки с пунктом. "
+                "Проверьте, тот ли файл указан в «Настройках».")
         if rows:
             if self._an_loaded_path == CONFIG.get("MACRO_MASTER_WB_PATH"):
                 src = "с сервера"
@@ -335,6 +363,15 @@ class AnalyticsPageMixin:
             self.an_list.addItem(item)
         self._an_updating = False
         self._an_update_counter()
+        # пока график не прочитан, подсказку ставят загрузчик и _an_on_rows
+        if self._an_rows:
+            if self.an_list.count():
+                self.an_list_box.show_content()
+            else:
+                self.an_list_box.show_hint(
+                    "Нет пунктов по выбранным условиям",
+                    "Смените специалиста, вид оборудования или статус, "
+                    "либо очистите поиск.")
 
     def _an_item_changed(self, item):
         if self._an_updating:
@@ -420,6 +457,9 @@ class AnalyticsPageMixin:
         self.an_progress.setValue(0)
         self.an_table.setRowCount(0)
         self._an_results = []
+        self.an_table_box.show_hint(
+            "Идёт проверка на Яндекс.Диске…",
+            "Результаты появятся здесь, когда проверка закончится.")
 
         from workers.analytics_worker import AnalyticsWorker
         worker = AnalyticsWorker(points, parent=self)
@@ -476,6 +516,8 @@ class AnalyticsPageMixin:
         self.an_chip_lost.setText(
             str(sum(1 for r in results if r["verdict"] == "not_found")))
         self.an_btn_export.setEnabled(bool(results))
+        if results:
+            self.an_table_box.show_content()
         self._an_set_tab(1)
 
     def _an_on_scan_finished(self, success: bool):
@@ -483,6 +525,11 @@ class AnalyticsPageMixin:
         self.an_btn_stop.setEnabled(False)
         self._workers.pop("analytics", None)
         self._an_update_counter()  # вернёт кнопку запуска в актуальное состояние
+        if not self._an_results:
+            self.an_table_box.show_hint(
+                "Проверка не дала результатов",
+                "Причина — в строке состояния внизу страницы. Можно запустить "
+                "проверку ещё раз.")
 
     # ── Выгрузка в Word ──
 

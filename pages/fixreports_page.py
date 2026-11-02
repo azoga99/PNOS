@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from utils import title_date_text, find_order_scan
-from widgets import dot_icon, LOG_COLORS
+from widgets import dot_icon, LOG_COLORS, EmptyState
 
 
 class FixReportsPageMixin:
@@ -110,12 +110,12 @@ class FixReportsPageMixin:
         ctrl = QHBoxLayout()
         ctrl.setSpacing(10)
         self.fix_btn_start = QPushButton("Начать правку")
-        self.fix_btn_start.setObjectName("green_button")
+        self.fix_btn_start.setObjectName("card_button")
         self.fix_btn_start.setCursor(Qt.PointingHandCursor)
         self.fix_btn_start.clicked.connect(self._start_fix_reports)
         ctrl.addWidget(self.fix_btn_start)
         self.fix_btn_stop = QPushButton("Остановить")
-        self.fix_btn_stop.setObjectName("segment")
+        self.fix_btn_stop.setObjectName("ghost_button")
         self.fix_btn_stop.setCursor(Qt.PointingHandCursor)
         self.fix_btn_stop.setEnabled(False)
         self.fix_btn_stop.clicked.connect(self._stop_fix_reports)
@@ -135,7 +135,11 @@ class FixReportsPageMixin:
         self.fix_log_list = QListWidget()
         self.fix_log_list.setObjectName("activity_feed")
         self.fix_log_list.setMinimumHeight(140)
-        outer.addWidget(self.fix_log_list, 1)
+        self.fix_log_box = EmptyState(
+            self.fix_log_list, "Журнал пуст",
+            "Выберите папку с отчётами, проверьте дату на титуле и нажмите "
+            "«Начать правку» — здесь появится ход работы по каждому файлу.")
+        outer.addWidget(self.fix_log_box, 1)
 
         self._fix_update_date_preview()
 
@@ -159,6 +163,7 @@ class FixReportsPageMixin:
         item = QListWidgetItem(message)
         item.setIcon(dot_icon(LOG_COLORS.get(category, LOG_COLORS["info"])))
         self.fix_log_list.addItem(item)
+        self.fix_log_box.show_content()
         self.fix_log_list.scrollToBottom()
         if category == "error":
             self._log_error(f"[Правка отчётов] {message}")

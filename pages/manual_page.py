@@ -11,14 +11,14 @@ import os
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QProgressBar,
-    QFrame, QLineEdit, QMessageBox, QStackedWidget, QListWidget,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
+    QProgressBar, QFrame, QLineEdit, QMessageBox, QStackedWidget, QListWidget,
     QListWidgetItem, QScrollArea,
 )
 
 from config import CONFIG
 from pages.repair_page import RepairPage
-from widgets import dot_icon, STATUS_COLORS
+from widgets import dot_icon, STATUS_COLORS, EmptyState
 
 
 class ManualPageMixin:
@@ -122,20 +122,31 @@ class ManualPageMixin:
         self.manual_point_list.setMinimumWidth(230)
         self.manual_point_list.setMaximumWidth(280)
         self.manual_point_list.currentItemChanged.connect(self._on_manual_point_selected)
-        left.addWidget(self.manual_point_list, 1)
-        legend = QLabel(
-            f'<span style="color:{STATUS_COLORS["done"]}">●</span> заполнен&nbsp;&nbsp;'
-            f'<span style="color:{STATUS_COLORS["idle"]}">●</span> не заполнен&nbsp;&nbsp;'
-            f'<span style="color:{STATUS_COLORS["wait"]}">●</span> пропущен&nbsp;&nbsp;'
-            f'<span style="color:{STATUS_COLORS["error"]}">●</span> не корректный')
-        legend.setObjectName("field_note")
-        legend.setWordWrap(True)
-        left.addWidget(legend)
+        self.manual_points_box = EmptyState(self.manual_point_list)
+        self.manual_points_box.setMinimumWidth(230)
+        self.manual_points_box.setMaximumWidth(280)
+        left.addWidget(self.manual_points_box, 1)
+        # Легенда сеткой 2×2: одной строкой она не влезает в ширину списка,
+        # а с переносом рвала «не корректный» пополам.
+        legend = QGridLayout()
+        legend.setContentsMargins(2, 0, 0, 0)
+        legend.setHorizontalSpacing(14)
+        legend.setVerticalSpacing(2)
+        for i, (status, caption) in enumerate((
+                ("done", "заполнен"), ("idle", "не заполнен"),
+                ("wait", "пропущен"), ("error", "не корректный"))):
+            lbl = QLabel(f'<span style="color:{STATUS_COLORS[status]}">●</span>'
+                         f'&nbsp;{caption.replace(" ", "&nbsp;")}')
+            lbl.setObjectName("field_note")
+            legend.addWidget(lbl, i // 2, i % 2)
+        legend.setColumnStretch(2, 1)
+        left.addLayout(legend)
         split.addLayout(left)
 
         form_scroll = QScrollArea()
         form_scroll.setWidgetResizable(True)
         form_scroll.setFrameShape(QFrame.NoFrame)
+        form_scroll.setMaximumWidth(820)   # поля формы не растягиваются на весь монитор
         form_card = QFrame()
         form_card.setObjectName("form_card")
         form = QVBoxLayout(form_card)
@@ -218,7 +229,7 @@ class ManualPageMixin:
         self.manual_repair_hint.setWordWrap(True)
         rb.addWidget(self.manual_repair_hint, 1)
         self.manual_btn_repair = QPushButton("Внести данные по ремонту")
-        self.manual_btn_repair.setObjectName("card_button")
+        self.manual_btn_repair.setObjectName("ghost_button")
         self.manual_btn_repair.setCursor(Qt.PointingHandCursor)
         self.manual_btn_repair.clicked.connect(self._open_repair_for_current)
         rb.addWidget(self.manual_btn_repair, 0)
@@ -237,6 +248,7 @@ class ManualPageMixin:
         self.manual_fields = f
         form_scroll.setWidget(form_card)
         split.addWidget(form_scroll, 1)
+        split.addStretch(0)
 
         # Обычный вид (список + форма) и полноширинный вид ремонта — во
         # внутреннем стеке, чтобы ремонт открывался на всю ширину.
@@ -353,6 +365,13 @@ class ManualPageMixin:
                 item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
             self.manual_point_list.addItem(item)
         self.manual_point_list.blockSignals(False)
+        if self.manual_point_list.count():
+            self.manual_points_box.show_content()
+        else:
+            self.manual_points_box.show_hint(
+                "Пунктов нет",
+                "Форма заполняется после шагов 1–2: введите номера на "
+                "странице «Пункты» и запустите их.")
 
         # Строка итога на карточке шага 3
         filled = sum(1 for i in range(self.manual_point_list.count())
@@ -378,6 +397,7 @@ class ManualPageMixin:
         else:
             self.manual_current = None
             self._clear_manual_form()
+        self._update_nav_badges()
 
     def _manual_point_state(self, folder, pt):
         if pt["invalid"]:

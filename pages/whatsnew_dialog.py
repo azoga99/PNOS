@@ -155,7 +155,7 @@ class WhatsNewDialog(QDialog):
         f.setContentsMargins(26, 12, 26, 16)
         f.addStretch()
         btn_close = QPushButton("Закрыть")
-        btn_close.setObjectName("blue_button")
+        btn_close.setObjectName("card_button")
         btn_close.setCursor(Qt.PointingHandCursor)
         btn_close.clicked.connect(self.accept)
         f.addWidget(btn_close)
