@@ -7,6 +7,7 @@
 """
 
 import os
+import socket
 import aiohttp
 import aiofiles
 import asyncio
@@ -15,11 +16,31 @@ from rapidfuzz import fuzz, process
 
 from config import CONFIG
 
+API_HOST = "cloud-api.yandex.net"
+CHECK_TIMEOUT = 20  # с — сколько ждать ответа при проверке связи
+
+# Подсказка для сотрудника: чаще всего связь режет VPN/прокси на компьютере.
+# На одном из рабочих ПК туннель sing-box отвечал на ya.ru, но не на *.yandex.net
+_NET_HINT = ("Проверьте интернет. Если включён VPN или прокси — отключите его "
+             "на время работы программы или пустите домены Яндекса мимо него.")
+
+
+def connection_problem(exc: BaseException) -> str:
+    """Понятная причина, по которой не удалось достучаться до Яндекс.Диска."""
+    if isinstance(exc, asyncio.TimeoutError):
+        return f"Яндекс.Диск не ответил за {CHECK_TIMEOUT} с. {_NET_HINT}"
+    if isinstance(getattr(exc, "os_error", None), socket.gaierror) or isinstance(exc, socket.gaierror):
+        return f"компьютер не может найти адрес {API_HOST} (ошибка DNS). {_NET_HINT}"
+    if isinstance(exc, aiohttp.ClientConnectorError):
+        return f"не удалось подключиться к {API_HOST}: {exc.os_error}. {_NET_HINT}"
+    return f"ошибка сети: {exc}"
+
 
 class YandexDiskAPI:
     """Клиент для работы с REST API Яндекс.Диска."""
 
-    BASE_URL = "https://cloud-api.yandex.net/v1/disk/resources"
+    DISK_URL = f"https://{API_HOST}/v1/disk/"
+    BASE_URL = f"https://{API_HOST}/v1/disk/resources"
     PAGE_LIMIT = 100  # Макс. элементов за один запрос (API макс = 100)
 
     def __init__(self, token: str):
@@ -41,6 +62,26 @@ class YandexDiskAPI:
     def clear_cache(self):
         """Очищает кеш содержимого папок."""
         self._cache.clear()
+
+    # ─── Проверка связи ─────────────────────────────────────────────
+
+    async def check_connection(self, session: aiohttp.ClientSession) -> str | None:
+        """
+        Один запрос к диску до начала работы: есть ли сеть и принят ли токен.
+        None — всё в порядке, иначе причина для сотрудника. Без этой проверки
+        обрыв сети выглядел как «пункт не найден» по каждому пункту.
+        """
+        try:
+            async with session.get(self.DISK_URL, headers=self.headers,
+                                   timeout=aiohttp.ClientTimeout(total=CHECK_TIMEOUT)) as r:
+                if r.status == 200:
+                    return None
+                if r.status in (401, 403):
+                    return (f"Яндекс.Диск отклонил токен доступа (HTTP {r.status}) — "
+                            f"сообщите разработчику, нужен новый токен")
+                return f"Яндекс.Диск ответил ошибкой HTTP {r.status}, попробуйте позже"
+        except Exception as e:
+            return connection_problem(e)
 
     # ─── Получение содержимого папки (с пагинацией и кешем) ──────────
 

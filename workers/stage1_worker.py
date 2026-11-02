@@ -118,6 +118,29 @@ class Stage1Worker(QThread):
 
             # Запускаем единую сессию для всех запросов
             async with aiohttp.ClientSession() as session:
+                # Сначала связь: без неё каждый пункт выглядел «не найденным»,
+                # и обрыв сети принимали за пустые папки на диске
+                problems = await asyncio.gather(
+                    api_items.check_connection(session),
+                    api_base.check_connection(session),
+                )
+                for account, problem in zip(("материалы пунктов", "шаблоны"), problems):
+                    if not problem:
+                        continue
+                    self.info.emit(f"Нет связи с Яндекс.Диском: {problem}", "error")
+                    self.log.emit(f"\n❌ Нет связи с Яндекс.Диском (диск «{account}»): {problem}")
+                    self.log.emit("   Скачивание не начиналось, пункты не тронуты.")
+                    for p_num in points:
+                        report["details"].append({
+                            "point": p_num,
+                            "status": "Не скачан — нет связи с Яндекс.Диском",
+                        })
+                    report["not_created"] = len(points)
+                    self.report_ready.emit(report)
+                    self.finished_ok.emit(False)
+                    return
+                self.log.emit("   ✓ Связь с Яндекс.Диском есть")
+
                 # Предзагрузка списков всех папок (ускоряет поиск в N раз)
                 extended_search_paths = await api_items.preload_search_paths(session, search_paths)
                 self.progress.emit(15)
